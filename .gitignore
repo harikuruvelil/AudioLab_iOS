@@ -1,0 +1,33 @@
+# Node / Vite
+**/node_modules/
+**/dist/
+**/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env
+.env.*
+!.env.example
+
+# Xcode / Apple build outputs
+DerivedData/
+build/
+*.xcuserstate
+**/xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.ipa
+*.dSYM*
+*.xcarchive
+
+# Swift Package Manager
+**/.build/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Intentionally not ignoring source code files.
