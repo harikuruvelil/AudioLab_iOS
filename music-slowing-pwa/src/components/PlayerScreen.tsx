@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EQ_BAND_LABELS, EQ_PRESET_NAMES, REVERB_PRESETS } from "../audioFxPresets";
+import {
+  EQ_MAX_FREQ,
+  EQ_MAX_GAIN_DB,
+  EQ_MAX_Q,
+  EQ_MIN_FREQ,
+  EQ_MIN_GAIN_DB,
+  EQ_MIN_Q,
+  REVERB_PRESETS,
+  bandSupportsGain,
+  formatEqFrequency
+} from "../audioFxPresets";
 import type {
+  EqBand,
+  EqGraphCurve,
   EqPresetName,
   PlaybackState,
   RepeatMode,
@@ -8,18 +20,22 @@ import type {
   TrackMeta,
   WaveformMode
 } from "../types";
-import { formatDuration, semitonesFromRate } from "../utils";
+import { formatDuration, getAudioFileExtension, semitonesFromRate } from "../utils";
 
 interface PlayerScreenProps {
   playback: PlaybackState;
   currentTrack: TrackMeta | null;
   repeatMode: RepeatMode;
   shuffleEnabled: boolean;
+  queueTracks: TrackMeta[];
   waveformEnabled: boolean;
   waveformMode: WaveformMode;
   onTogglePlay: () => Promise<void> | void;
   onPrev: () => Promise<void> | void;
   onNext: () => Promise<void> | void;
+  onRemoveQueueAt: (index: number) => void;
+  onClearQueue: () => void;
+  onPlayQueueAt: (index: number) => Promise<void> | void;
   onSeekCommit: (seconds: number) => void;
   onRateChange: (rate: number) => void;
   onReverbEnabledChange: (enabled: boolean) => void;
@@ -27,8 +43,20 @@ interface PlayerScreenProps {
   onReverbWetChange: (wet: number) => void;
   onNextReverbPreset: () => Promise<void> | void;
   onEqEnabledChange: (enabled: boolean) => void;
-  onEqBandGainChange: (bandIndex: number, gainDb: number) => void;
-  onEqPresetChange: (presetName: EqPresetName) => void;
+  onEqBandConfigChange: (
+    bandId: string,
+    patch: Partial<Pick<EqBand, "enabled" | "frequency" | "gainDb" | "q">>
+  ) => void;
+  onEqResetFlat: () => void;
+  eqCurveSelection: EqPresetName | "Custom 1" | "Custom 2" | "Custom 3";
+  eqCurveOptions: Array<EqPresetName | "Custom 1" | "Custom 2" | "Custom 3">;
+  onEqCurveSelectionChange: (
+    selection: EqPresetName | "Custom 1" | "Custom 2" | "Custom 3"
+  ) => void;
+  getEqGraphCurve: () => EqGraphCurve | null;
+  appearanceThemeId: string;
+  appearanceThemes: Array<{ id: string; label: string; accent: string; accent2: string }>;
+  onAppearanceThemeChange: (themeId: string) => void;
   onWaveformEnabledChange: (enabled: boolean) => void;
   onWaveformModeChange: (mode: WaveformMode) => void;
   getWaveformAnalysers: () => {
@@ -51,6 +79,34 @@ function formatHz(value: number | null): string {
   return Math.round(value).toLocaleString();
 }
 
+function isLosslessFormat(format: string | null): boolean {
+  return format === "wav" || format === "flac" || format === "alac";
+}
+
+function freqToSliderValue(freq: number): number {
+  const clamped = clamp(freq, EQ_MIN_FREQ, EQ_MAX_FREQ);
+  return ((Math.log10(clamped) - EQ_LOG_MIN) / (EQ_LOG_MAX - EQ_LOG_MIN)) * 1000;
+}
+
+function sliderValueToFreq(value: number): number {
+  const normalized = clamp(value, 0, 1000) / 1000;
+  return 10 ** (EQ_LOG_MIN + normalized * (EQ_LOG_MAX - EQ_LOG_MIN));
+}
+
+function sampleCurveAtFrequency(curve: EqGraphCurve | null, frequency: number): number {
+  if (!curve || curve.frequencies.length === 0 || curve.gainsDb.length === 0) return 0;
+  let closestIndex = 0;
+  let closestDistance = Math.abs(curve.frequencies[0] - frequency);
+  for (let i = 1; i < curve.frequencies.length; i += 1) {
+    const distance = Math.abs(curve.frequencies[i] - frequency);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = i;
+    }
+  }
+  return curve.gainsDb[closestIndex] ?? 0;
+}
+
 function createByteArray(length: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(new ArrayBuffer(length));
 }
@@ -60,8 +116,9 @@ function createFloatArray(length: number): Float32Array<ArrayBuffer> {
 }
 
 const REVERB_WET_INTERNAL_MAX = 0.6;
-const EQ_DISPLAY_BAND_LABELS = ["100", "250", "1k", "4k", "10k"] as const;
 const ICON_GEAR = "\u2699";
+const ICON_QUEUE = "\u2630";
+const ICON_APPEAR = "\u25C8";
 const ICON_SHUFFLE = "\uD83D\uDD00";
 const ICON_REPEAT = "\uD83D\uDD01";
 const ICON_PREV = "\u23EE";
@@ -69,17 +126,24 @@ const ICON_PLAY = "\u25B6";
 const ICON_PAUSE = "\u23F8";
 const ICON_NEXT = "\u23ED";
 const ICON_CLOSE = "\u2715";
+const EQ_GRAPH_RANGE_DB = 18;
+const EQ_LOG_MIN = Math.log10(EQ_MIN_FREQ);
+const EQ_LOG_MAX = Math.log10(EQ_MAX_FREQ);
 
 export function PlayerScreen({
   playback,
   currentTrack,
   repeatMode,
   shuffleEnabled,
+  queueTracks,
   waveformEnabled,
   waveformMode,
   onTogglePlay,
   onPrev,
   onNext,
+  onRemoveQueueAt,
+  onClearQueue,
+  onPlayQueueAt,
   onSeekCommit,
   onRateChange,
   onReverbEnabledChange,
@@ -87,8 +151,15 @@ export function PlayerScreen({
   onReverbWetChange,
   onNextReverbPreset,
   onEqEnabledChange,
-  onEqBandGainChange,
-  onEqPresetChange,
+  onEqBandConfigChange,
+  onEqResetFlat,
+  eqCurveSelection,
+  eqCurveOptions,
+  onEqCurveSelectionChange,
+  getEqGraphCurve,
+  appearanceThemeId,
+  appearanceThemes,
+  onAppearanceThemeChange,
   onWaveformEnabledChange,
   onWaveformModeChange,
   getWaveformAnalysers,
@@ -102,16 +173,22 @@ export function PlayerScreen({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [previewTime, setPreviewTime] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
   const [showQualityDetails, setShowQualityDetails] = useState(false);
   const [vectorscopeMono, setVectorscopeMono] = useState(false);
+  const [selectedEqBandId, setSelectedEqBandId] = useState<string | null>(null);
 
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const eqGraphCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const monoBytesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const leftBytesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const rightBytesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const leftFloatRef = useRef<Float32Array<ArrayBuffer> | null>(null);
   const rightFloatRef = useRef<Float32Array<ArrayBuffer> | null>(null);
   const vectorscopeMonoRef = useRef(false);
+  const vectorscopeDiffRef = useRef(0);
+  const vectorscopeSingleChannelRef = useRef(0);
 
   useEffect(() => {
     if (!isScrubbing) {
@@ -120,10 +197,12 @@ export function PlayerScreen({
   }, [isScrubbing, playback.currentTime]);
 
   useEffect(() => {
-    if (!isSettingsOpen) return;
+    if (!isSettingsOpen && !isQueueOpen && !isAppearanceOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsSettingsOpen(false);
+        setIsQueueOpen(false);
+        setIsAppearanceOpen(false);
       }
     };
 
@@ -131,7 +210,24 @@ export function PlayerScreen({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isSettingsOpen]);
+  }, [isAppearanceOpen, isQueueOpen, isSettingsOpen]);
+
+  useEffect(() => {
+    if (playback.eqBands.length === 0) {
+      setSelectedEqBandId(null);
+      return;
+    }
+
+    const hasCurrent = selectedEqBandId
+      ? playback.eqBands.some((band) => band.id === selectedEqBandId)
+      : false;
+
+    if (!hasCurrent) {
+      const preferredBand =
+        playback.eqBands.find((band) => bandSupportsGain(band.type)) ?? playback.eqBands[0];
+      setSelectedEqBandId(preferredBand.id);
+    }
+  }, [playback.eqBands, selectedEqBandId]);
 
   const seekMax = Math.max(playback.duration, 0.001);
   const displayedTime = isScrubbing ? previewTime : playback.currentTime;
@@ -141,13 +237,25 @@ export function PlayerScreen({
     clamp((playback.reverbWet / REVERB_WET_INTERNAL_MAX) * 100, 0, 100)
   );
 
+  const trackFormat = currentTrack ? getAudioFileExtension(currentTrack.filename) : null;
+  const formatLabel = trackFormat ?? "unknown";
+  const formatLabelUpper = formatLabel.toUpperCase();
+  const isLossless = isLosslessFormat(trackFormat);
   const isQualityChecking = playback.quality.status === "checking";
   const hasResampled = playback.quality.status === "resampled";
   const qualityLabel = isQualityChecking
     ? "CHECKING..."
     : hasResampled
       ? "RESAMPLED"
-      : "FULL RATE MATCH";
+      : isLossless
+        ? (playback.quality.trackHz ?? 0) > 44100
+          ? "PCM+"
+          : "PCM"
+        : formatLabelUpper;
+
+  const qualityFormatLine = isQualityChecking
+    ? "Format: loading..."
+    : `Format: ${formatLabelUpper}`;
 
   const qualityDetails = useMemo(() => {
     const rows: string[] = [];
@@ -162,6 +270,19 @@ export function PlayerScreen({
     }
     return rows;
   }, [playback.quality]);
+
+  const selectedEqBand = useMemo(() => {
+    if (playback.eqBands.length === 0) return null;
+    const byId = selectedEqBandId
+      ? playback.eqBands.find((band) => band.id === selectedEqBandId)
+      : null;
+    return byId ?? playback.eqBands[0];
+  }, [playback.eqBands, selectedEqBandId]);
+
+  const eqGraphCurve = useMemo(
+    () => (isSettingsOpen ? getEqGraphCurve() : null),
+    [getEqGraphCurve, isSettingsOpen, playback.eqBands, playback.eqEnabled]
+  );
 
   const commitSeek = useCallback(() => {
     if (!isScrubbing) return;
@@ -194,6 +315,8 @@ export function PlayerScreen({
   useEffect(() => {
     if (waveformMode !== "vectorscope" || !waveformEnabled || !playback.isPlaying) {
       vectorscopeMonoRef.current = false;
+      vectorscopeDiffRef.current = 0;
+      vectorscopeSingleChannelRef.current = 0;
       setVectorscopeMono(false);
     }
   }, [playback.isPlaying, waveformEnabled, waveformMode]);
@@ -202,10 +325,17 @@ export function PlayerScreen({
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
 
-    const context2d = canvas.getContext("2d");
+    const context2d =
+      canvas.getContext("2d", {
+        alpha: false,
+        desynchronized: true
+      }) ?? canvas.getContext("2d");
     if (!context2d) return;
+    context2d.imageSmoothingEnabled = false;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let frameWidth = 1;
+    let frameHeight = 1;
 
     const resizeCanvas = () => {
       const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
@@ -214,11 +344,14 @@ export function PlayerScreen({
         canvas.width = width;
         canvas.height = height;
       }
+      frameWidth = width;
+      frameHeight = height;
     };
 
     const drawIdle = () => {
       resizeCanvas();
-      const { width, height } = canvas;
+      const width = frameWidth;
+      const height = frameHeight;
       context2d.fillStyle = "rgba(12, 16, 28, 0.92)";
       context2d.fillRect(0, 0, width, height);
 
@@ -239,9 +372,12 @@ export function PlayerScreen({
       const waveform = monoBytesRef.current;
       analyser.getByteTimeDomainData(waveform);
 
-      const { width, height } = canvas;
+      const width = frameWidth;
+      const height = frameHeight;
+      const maxPoints = Math.max(280, Math.min(920, Math.floor(width / Math.max(0.6, dpr * 0.7))));
+      const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
       context2d.beginPath();
-      for (let i = 0; i < waveform.length; i += 1) {
+      for (let i = 0; i < waveform.length; i += stride) {
         const x = (i / (waveform.length - 1)) * width;
         const normalized = (waveform[i] - 128) / 128;
         const y = height * 0.5 + normalized * height * 0.36;
@@ -264,14 +400,17 @@ export function PlayerScreen({
       const waveform = monoBytesRef.current;
       analyser.getByteTimeDomainData(waveform);
 
-      const { width, height } = canvas;
+      const width = frameWidth;
+      const height = frameHeight;
       const cx = width * 0.5;
       const cy = height * 0.5;
       const baseRadius = Math.min(width, height) * 0.28;
       const amplitudeScale = Math.min(width, height) * 0.12;
+      const maxPoints = Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
+      const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
 
       context2d.beginPath();
-      for (let i = 0; i < waveform.length; i += 1) {
+      for (let i = 0; i < waveform.length; i += stride) {
         const angle = (i / waveform.length) * Math.PI * 2;
         const normalized = (waveform[i] - 128) / 128;
         const radius = baseRadius + normalized * amplitudeScale;
@@ -319,7 +458,8 @@ export function PlayerScreen({
         }
       }
 
-      const stride = 2;
+      const pointBudget = Math.max(280, Math.min(900, Math.floor(frameWidth / dpr)));
+      const stride = Math.max(1, Math.floor(sampleCount / pointBudget));
       let diffSum = 0;
       let diffCount = 0;
       let leftAbsSum = 0;
@@ -332,18 +472,28 @@ export function PlayerScreen({
         rightAbsSum += Math.abs(rightValue);
         diffCount += 1;
       }
-      const monoLikeFromDiff = diffCount > 0 && diffSum / diffCount < 0.01;
+      const diffAvg = diffCount > 0 ? diffSum / diffCount : 0;
       const leftAvg = diffCount > 0 ? leftAbsSum / diffCount : 0;
       const rightAvg = diffCount > 0 ? rightAbsSum / diffCount : 0;
-      const monoLikeFromSingleChannel = Math.min(leftAvg, rightAvg) < 0.005 && Math.max(leftAvg, rightAvg) > 0.02;
-      const monoDetected = monoLikeFromDiff || monoLikeFromSingleChannel;
+      const singleChannelRatio = Math.min(leftAvg, rightAvg) / Math.max(0.00001, Math.max(leftAvg, rightAvg));
+      vectorscopeDiffRef.current = vectorscopeDiffRef.current * 0.82 + diffAvg * 0.18;
+      vectorscopeSingleChannelRef.current =
+        vectorscopeSingleChannelRef.current * 0.82 + singleChannelRatio * 0.18;
+      const monoLikeFromDiff = vectorscopeDiffRef.current < 0.008;
+      const stereoEnoughFromDiff = vectorscopeDiffRef.current > 0.014;
+      const monoLikeFromSingleChannel = vectorscopeSingleChannelRef.current < 0.15;
+      const stereoEnoughFromSingleChannel = vectorscopeSingleChannelRef.current > 0.3;
+      const monoDetected = vectorscopeMonoRef.current
+        ? !(stereoEnoughFromDiff && stereoEnoughFromSingleChannel)
+        : monoLikeFromDiff || monoLikeFromSingleChannel;
       const monoUseRight = rightAvg > leftAvg;
       if (monoDetected !== vectorscopeMonoRef.current) {
         vectorscopeMonoRef.current = monoDetected;
         setVectorscopeMono(monoDetected);
       }
 
-      const { width, height } = canvas;
+      const width = frameWidth;
+      const height = frameHeight;
       const cx = width * 0.5;
       const cy = height * 0.5;
       const scale = Math.min(width, height) * 0.42;
@@ -354,7 +504,7 @@ export function PlayerScreen({
       context2d.moveTo(cx, 0);
       context2d.lineTo(cx, height);
       context2d.lineWidth = Math.max(1, dpr);
-      context2d.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      context2d.strokeStyle = "rgba(255, 255, 255, 0.1)";
       context2d.stroke();
 
       context2d.beginPath();
@@ -370,34 +520,69 @@ export function PlayerScreen({
           context2d.lineTo(x, y);
         }
       }
-      context2d.lineWidth = Math.max(1.1, dpr);
-      context2d.strokeStyle = "rgba(101, 212, 255, 0.85)";
+      context2d.lineJoin = "round";
+      context2d.lineCap = "round";
+      context2d.lineWidth = Math.max(2.1, dpr * 1.4);
+      context2d.strokeStyle = "rgba(101, 212, 255, 0.24)";
+      context2d.stroke();
+      context2d.lineWidth = Math.max(1.05, dpr);
+      context2d.strokeStyle = "rgba(117, 227, 255, 0.92)";
       context2d.stroke();
     };
 
     let rafHandle = 0;
-    const drawFrame = () => {
-      resizeCanvas();
-      const { width, height } = canvas;
+    let cachedAnalysers = getWaveformAnalysers();
+    let analyserRefreshCounter = 0;
+    let lastRenderedAt = 0;
+    const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
+    const targetFps = uiOverlayOpen ? 42 : waveformMode === "vectorscope" ? 56 : 60;
+    const minFrameMs = 1000 / targetFps;
 
-      context2d.fillStyle = "rgba(12, 16, 28, 0.92)";
-      context2d.fillRect(0, 0, width, height);
+    const drawFrame = (timestamp: number) => {
+      if (document.hidden) {
+        rafHandle = window.requestAnimationFrame(drawFrame);
+        return;
+      }
+      if (lastRenderedAt > 0 && timestamp - lastRenderedAt < minFrameMs) {
+        rafHandle = window.requestAnimationFrame(drawFrame);
+        return;
+      }
+      lastRenderedAt = timestamp;
 
-      const analysers = getWaveformAnalysers();
+      const width = frameWidth;
+      const height = frameHeight;
 
-      if (waveformMode === "vectorscope" && analysers.left && analysers.right) {
-        drawVectorscope(analysers.left, analysers.right);
-      } else if (waveformMode === "circular" && analysers.mono) {
-        drawCircular(analysers.mono);
-      } else if (analysers.mono) {
-        drawLinear(analysers.mono);
-      } else {
+      try {
+        context2d.fillStyle =
+          waveformMode === "vectorscope" ? "rgba(12, 16, 28, 0.4)" : "rgba(12, 16, 28, 0.92)";
+        context2d.fillRect(0, 0, width, height);
+
+        analyserRefreshCounter += 1;
+        if (
+          analyserRefreshCounter >= 60 ||
+          (!cachedAnalysers.mono && !cachedAnalysers.left && !cachedAnalysers.right)
+        ) {
+          cachedAnalysers = getWaveformAnalysers();
+          analyserRefreshCounter = 0;
+        }
+
+        if (waveformMode === "vectorscope" && cachedAnalysers.left && cachedAnalysers.right) {
+          drawVectorscope(cachedAnalysers.left, cachedAnalysers.right);
+        } else if (waveformMode === "circular" && cachedAnalysers.mono) {
+          drawCircular(cachedAnalysers.mono);
+        } else if (cachedAnalysers.mono) {
+          drawLinear(cachedAnalysers.mono);
+        } else {
+          drawIdle();
+        }
+      } catch {
         drawIdle();
       }
 
       rafHandle = window.requestAnimationFrame(drawFrame);
     };
 
+    resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
     if (!waveformEnabled || !playback.isPlaying) {
       drawIdle();
@@ -411,7 +596,106 @@ export function PlayerScreen({
       window.removeEventListener("resize", resizeCanvas);
       window.cancelAnimationFrame(rafHandle);
     };
-  }, [getWaveformAnalysers, playback.isPlaying, waveformEnabled, waveformMode]);
+  }, [
+    getWaveformAnalysers,
+    isAppearanceOpen,
+    isQueueOpen,
+    isSettingsOpen,
+    playback.isPlaying,
+    waveformEnabled,
+    waveformMode
+  ]);
+
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    const canvas = eqGraphCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    const freqToX = (frequency: number): number => {
+      const normalized =
+        (Math.log10(clamp(frequency, EQ_MIN_FREQ, EQ_MAX_FREQ)) - EQ_LOG_MIN) /
+        (EQ_LOG_MAX - EQ_LOG_MIN);
+      return normalized * width;
+    };
+
+    const gainToY = (gainDb: number): number => {
+      const normalized = (clamp(gainDb, -EQ_GRAPH_RANGE_DB, EQ_GRAPH_RANGE_DB) + EQ_GRAPH_RANGE_DB) /
+        (2 * EQ_GRAPH_RANGE_DB);
+      return (1 - normalized) * height;
+    };
+
+    ctx.fillStyle = "rgba(12, 16, 28, 0.95)";
+    ctx.fillRect(0, 0, width, height);
+
+    const gridFrequencies = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = Math.max(1, dpr * 0.7);
+    for (const frequency of gridFrequencies) {
+      const x = freqToX(frequency);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+
+    const dbLines = [-18, -12, -6, 0, 6, 12, 18];
+    for (const db of dbLines) {
+      const y = gainToY(db);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.strokeStyle = db === 0 ? "rgba(101,212,255,0.38)" : "rgba(255,255,255,0.08)";
+      ctx.stroke();
+    }
+
+    const curveToRender = eqGraphCurve;
+    if (curveToRender && curveToRender.frequencies.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < curveToRender.frequencies.length; i += 1) {
+        const x = freqToX(curveToRender.frequencies[i]);
+        const y = gainToY(curveToRender.gainsDb[i] ?? 0);
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.strokeStyle = playback.eqEnabled
+        ? "rgba(110, 224, 255, 0.95)"
+        : "rgba(110, 224, 255, 0.5)";
+      ctx.lineWidth = Math.max(1.6, dpr);
+      ctx.stroke();
+    }
+
+    for (const band of playback.eqBands) {
+      const markerGain = bandSupportsGain(band.type)
+        ? sampleCurveAtFrequency(curveToRender, band.frequency)
+        : 0;
+      const x = freqToX(band.frequency);
+      const y = gainToY(markerGain);
+      const isSelected = selectedEqBandId === band.id;
+
+      ctx.beginPath();
+      ctx.arc(x, y, isSelected ? 4.2 * dpr : 3.2 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = band.enabled ? "rgba(101,212,255,0.9)" : "rgba(130,150,190,0.7)";
+      ctx.fill();
+      ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.95)" : "rgba(18,24,40,0.9)";
+      ctx.lineWidth = Math.max(1, dpr * 0.7);
+      ctx.stroke();
+    }
+  }, [eqGraphCurve, isSettingsOpen, playback.eqBands, playback.eqEnabled, selectedEqBandId]);
 
   const repeatLabel = useMemo(() => {
     if (repeatMode === "one") return "One";
@@ -432,13 +716,12 @@ export function PlayerScreen({
           <div className="status-chip-row">
             <button
               type="button"
-              className={`status-chip ${
-                isQualityChecking
+              className={`status-chip ${isQualityChecking
                   ? "status-chip-neutral"
                   : hasResampled
                     ? "status-chip-warn"
                     : "status-chip-ok"
-              }`}
+                }`}
               disabled={!hasResampled}
               onClick={() => {
                 if (hasResampled) {
@@ -458,20 +741,58 @@ export function PlayerScreen({
               >
                 CLIP
               </span>
-            ) : null}
+              ) : null}
           </div>
+          <p className="quality-format">{qualityFormatLine}</p>
           {hasResampled && showQualityDetails && qualityDetails.length > 0 ? (
             <p className="quality-details">{qualityDetails.join(" | ")}</p>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="icon-button settings-trigger"
-          aria-label="Open settings"
-          onClick={() => setIsSettingsOpen(true)}
-        >
-          {ICON_GEAR}
-        </button>
+        <div className="player-header-actions">
+          <button
+            type="button"
+            className="icon-button settings-trigger"
+            aria-label="Open queue"
+            onClick={() => {
+              setIsSettingsOpen(false);
+              setIsAppearanceOpen(false);
+              setIsQueueOpen(true);
+            }}
+          >
+            {ICON_QUEUE}
+            {queueTracks.length > 0 ? (
+              <span className="header-button-badge" aria-hidden="true">
+                {queueTracks.length}
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            className="icon-button settings-trigger"
+            aria-label="Customize appearance"
+            onClick={() => {
+              setIsSettingsOpen(false);
+              setIsQueueOpen(false);
+              setIsAppearanceOpen(true);
+            }}
+          >
+            {ICON_APPEAR}
+          </button>
+
+          <button
+            type="button"
+            className="icon-button settings-trigger"
+            aria-label="Open settings"
+            onClick={() => {
+              setIsAppearanceOpen(false);
+              setIsQueueOpen(false);
+              setIsSettingsOpen(true);
+            }}
+          >
+            {ICON_GEAR}
+          </button>
+        </div>
       </div>
 
       <div className="player-card">
@@ -556,7 +877,7 @@ export function PlayerScreen({
           className="speed-slider"
           type="range"
           min={0.5}
-          max={1.1}
+          max={1.5}
           step={0.01}
           value={playback.rate}
           onChange={(event) => onRateChange(Number(event.currentTarget.value))}
@@ -565,6 +886,45 @@ export function PlayerScreen({
         <p className="player-subtitle">
           Pitch Shift: {pitchSemitones.toFixed(2)} semitones
         </p>
+
+        <div className="speed-preset-row">
+          <select
+            className="fx-select speed-preset-select"
+            value={
+              [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.05, 1.10, 1.15, 1.20].some(
+                (p) => Math.abs(playback.rate - p) < 0.005
+              )
+                ? playback.rate.toFixed(2)
+                : "custom"
+            }
+            onChange={(event) => {
+              const v = event.currentTarget.value;
+              if (v !== "custom") onRateChange(Number(v));
+            }}
+            aria-label="Speed preset"
+          >
+            <option value="custom" disabled>Preset...</option>
+            <option value="0.70">0.70x</option>
+            <option value="0.75">0.75x</option>
+            <option value="0.80">0.80x</option>
+            <option value="0.85">0.85x</option>
+            <option value="0.90">0.90x</option>
+            <option value="0.95">0.95x</option>
+            <option value="1.05">1.05x</option>
+            <option value="1.10">1.10x</option>
+            <option value="1.15">1.15x</option>
+            <option value="1.20">1.20x</option>
+          </select>
+
+          <button
+            type="button"
+            className="transport-button unity-button"
+            onClick={() => onRateChange(1.0)}
+            aria-label="Reset speed to 1.0x"
+          >
+            1.0x Unity
+          </button>
+        </div>
       </div>
 
       <div className="transport-row transport-row-upgraded">
@@ -604,6 +964,121 @@ export function PlayerScreen({
           <span aria-hidden="true">{ICON_NEXT}</span>
         </button>
       </div>
+
+      {isQueueOpen ? (
+        <div
+          className="settings-overlay"
+          onClick={() => setIsQueueOpen(false)}
+          role="presentation"
+        >
+          <section
+            className="settings-sheet queue-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Playback queue"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="settings-sheet-header">
+              <h3>Queue ({queueTracks.length})</h3>
+              <button
+                type="button"
+                className="icon-button settings-close"
+                onClick={() => setIsQueueOpen(false)}
+                aria-label="Close queue"
+              >
+                {ICON_CLOSE}
+              </button>
+            </header>
+
+            {queueTracks.length === 0 ? (
+              <p className="empty-state">Queue is empty. Add tracks from Library with Queue.</p>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="transport-button queue-clear-button"
+                  onClick={onClearQueue}
+                >
+                  Clear Queue
+                </button>
+
+                <ul className="queue-list">
+                  {queueTracks.map((track, index) => (
+                    <li key={`${track.id}-${index}`} className="queue-row">
+                      <button
+                        type="button"
+                        className="queue-main"
+                        onClick={() => {
+                          void onPlayQueueAt(index);
+                          setIsQueueOpen(false);
+                        }}
+                      >
+                        <span className="queue-index">{index + 1}.</span>
+                        <span className="queue-title">{track.displayName}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button queue-remove"
+                        onClick={() => onRemoveQueueAt(index)}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+        </div>
+      ) : null}
+
+      {isAppearanceOpen ? (
+        <div
+          className="settings-overlay"
+          onClick={() => setIsAppearanceOpen(false)}
+          role="presentation"
+        >
+          <section
+            className="settings-sheet appearance-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Customize appearance"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="settings-sheet-header">
+              <h3>Customize Appearance</h3>
+              <button
+                type="button"
+                className="icon-button settings-close"
+                onClick={() => setIsAppearanceOpen(false)}
+                aria-label="Close appearance settings"
+              >
+                {ICON_CLOSE}
+              </button>
+            </header>
+
+            <div className="appearance-grid">
+              {appearanceThemes.map((theme) => (
+                <button
+                  key={theme.id}
+                  type="button"
+                  className={`appearance-option ${appearanceThemeId === theme.id ? "is-selected" : ""}`}
+                  onClick={() => onAppearanceThemeChange(theme.id)}
+                >
+                  <span
+                    className="appearance-swatch"
+                    style={{
+                      background: `linear-gradient(120deg, ${theme.accent} 0%, ${theme.accent2} 100%)`
+                    }}
+                    aria-hidden="true"
+                  />
+                  <span className="appearance-option-title">{theme.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isSettingsOpen ? (
         <div
@@ -717,7 +1192,7 @@ export function PlayerScreen({
 
             <div className="fx-card">
               <div className="toggle-row">
-                <span>EQ</span>
+                <span>Parametric EQ</span>
                 <label className="toggle-switch">
                   <input
                     type="checkbox"
@@ -731,49 +1206,133 @@ export function PlayerScreen({
               <label className="field-label" htmlFor="eq-preset-select">
                 Preset
               </label>
-              <select
-                id="eq-preset-select"
-                className="fx-select"
-                value={playback.eqPresetName ?? "Custom"}
-                onChange={(event) => {
-                  const next = event.currentTarget.value;
-                  if (next !== "Custom") {
-                    onEqPresetChange(next as EqPresetName);
-                  }
-                }}
-              >
-                {EQ_PRESET_NAMES.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-                <option value="Custom">Custom</option>
-              </select>
+              <div className="eq-preset-row">
+                <select
+                  id="eq-preset-select"
+                  className="fx-select eq-preset-select"
+                  value={eqCurveSelection}
+                  onChange={(event) => {
+                    onEqCurveSelectionChange(
+                      event.currentTarget.value as EqPresetName | "Custom 1" | "Custom 2" | "Custom 3"
+                    );
+                  }}
+                >
+                  {eqCurveOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="transport-button eq-flat-button"
+                  onClick={onEqResetFlat}
+                >
+                  Flat Reset
+                </button>
+              </div>
 
-              <div className="eq-faders">
-                {playback.eqBandGains.map((gainDb, index) => (
-                  <label className="eq-fader" key={EQ_BAND_LABELS[index]}>
-                    <span className="eq-fader-value">
-                      {gainDb >= 0 ? "+" : ""}
-                      {gainDb.toFixed(1)} dB
-                    </span>
-                    <span className="eq-fader-track">
-                      <input
-                        className="eq-slider-vertical"
-                        type="range"
-                        min={-12}
-                        max={12}
-                        step={0.5}
-                        value={gainDb}
-                        onChange={(event) =>
-                          onEqBandGainChange(index, Number(event.currentTarget.value))
-                        }
-                      />
-                    </span>
-                    <span className="eq-fader-label">{EQ_DISPLAY_BAND_LABELS[index]}</span>
-                  </label>
+              <div className="eq-graph-wrap">
+                <canvas className="eq-graph-canvas" ref={eqGraphCanvasRef} />
+                {!playback.eqEnabled ? (
+                  <p className="eq-graph-note">EQ bypassed (curve shown for editing).</p>
+                ) : null}
+              </div>
+
+              <div className="eq-band-strip">
+                {playback.eqBands.map((band) => (
+                  <button
+                    key={band.id}
+                    type="button"
+                    className={`eq-band-chip ${selectedEqBand?.id === band.id ? "is-selected" : ""} ${band.enabled ? "" : "is-disabled"
+                      }`}
+                    onClick={() => setSelectedEqBandId(band.id)}
+                  >
+                    <span>{band.label}</span>
+                    <small>{formatEqFrequency(band.frequency)}</small>
+                  </button>
                 ))}
               </div>
+
+              {selectedEqBand ? (
+                <div className="eq-editor">
+                  <div className="eq-editor-header">
+                    <strong>
+                      {selectedEqBand.label} | {selectedEqBand.type}
+                    </strong>
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={selectedEqBand.enabled}
+                        onChange={(event) =>
+                          onEqBandConfigChange(selectedEqBand.id, {
+                            enabled: event.currentTarget.checked
+                          })
+                        }
+                      />
+                      <span>{selectedEqBand.enabled ? "Enabled" : "Bypassed"}</span>
+                    </label>
+                  </div>
+
+                  <label className="field-label">
+                    Frequency: {formatEqFrequency(selectedEqBand.frequency)}
+                  </label>
+                  <input
+                    className="speed-slider"
+                    type="range"
+                    min={0}
+                    max={1000}
+                    step={1}
+                    value={freqToSliderValue(selectedEqBand.frequency)}
+                    onChange={(event) =>
+                      onEqBandConfigChange(selectedEqBand.id, {
+                        frequency: sliderValueToFreq(Number(event.currentTarget.value))
+                      })
+                    }
+                  />
+
+                  <label className="field-label">
+                    Level (attenuate / boost): {selectedEqBand.gainDb >= 0 ? "+" : ""}
+                    {selectedEqBand.gainDb.toFixed(1)} dB
+                  </label>
+                  <input
+                    className="speed-slider"
+                    type="range"
+                    min={EQ_MIN_GAIN_DB}
+                    max={EQ_MAX_GAIN_DB}
+                    step={0.5}
+                    value={selectedEqBand.gainDb}
+                    disabled={!bandSupportsGain(selectedEqBand.type)}
+                    onChange={(event) =>
+                      onEqBandConfigChange(selectedEqBand.id, {
+                        gainDb: Number(event.currentTarget.value)
+                      })
+                    }
+                  />
+                  {!bandSupportsGain(selectedEqBand.type) ? (
+                    <p className="eq-editor-note">
+                      Level is fixed for this filter type. Select Low/B1/B2/B3/B4/High to boost or cut.
+                    </p>
+                  ) : null}
+
+                  <label className="field-label">
+                    Q / Resonance: {selectedEqBand.q.toFixed(2)}
+                  </label>
+                  <input
+                    className="speed-slider"
+                    type="range"
+                    min={EQ_MIN_Q}
+                    max={EQ_MAX_Q}
+                    step={0.05}
+                    value={selectedEqBand.q}
+                    onChange={(event) =>
+                      onEqBandConfigChange(selectedEqBand.id, {
+                        q: Number(event.currentTarget.value)
+                      })
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
           </section>
         </div>
@@ -781,3 +1340,4 @@ export function PlayerScreen({
     </section>
   );
 }
+

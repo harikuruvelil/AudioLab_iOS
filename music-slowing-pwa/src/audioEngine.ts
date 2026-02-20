@@ -1,6 +1,19 @@
-import { EQ_PRESETS, REVERB_PRESET_MAP } from "./audioFxPresets";
+import {
+  EQ_MAX_FREQ,
+  EQ_MAX_GAIN_DB,
+  EQ_MAX_Q,
+  EQ_MIN_FREQ,
+  EQ_MIN_GAIN_DB,
+  EQ_MIN_Q,
+  REVERB_PRESET_MAP,
+  applyEqPreset,
+  bandSupportsGain,
+  createDefaultEqBands,
+  sanitizeEqBands
+} from "./audioFxPresets";
 import type {
-  EqBandGains,
+  EqBand,
+  EqGraphCurve,
   EqPresetName,
   PlaybackState,
   QualityState,
@@ -8,13 +21,13 @@ import type {
 } from "./types";
 
 const MIN_RATE = 0.5;
-const MAX_RATE = 1.1;
+const MAX_RATE = 1.5;
 const MIN_REVERB_WET = 0;
 const MAX_REVERB_WET = 0.6;
-const MIN_EQ_GAIN_DB = -12;
-const MAX_EQ_GAIN_DB = 12;
 const CLIP_THRESHOLD = 0.999;
 const CLIP_HOLD_MS = 1000;
+const HIGHPASS_BYPASS_FREQ = 10;
+const LOWPASS_BYPASS_FREQ = 24000;
 
 function createDefaultQualityState(): QualityState {
   return {
@@ -41,7 +54,15 @@ function clampWet(wet: number): number {
 }
 
 function clampEqGain(gainDb: number): number {
-  return clamp(gainDb, MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB);
+  return clamp(gainDb, EQ_MIN_GAIN_DB, EQ_MAX_GAIN_DB);
+}
+
+function clampEqFrequency(frequency: number): number {
+  return clamp(frequency, EQ_MIN_FREQ, EQ_MAX_FREQ);
+}
+
+function clampEqQ(q: number): number {
+  return clamp(q, EQ_MIN_Q, EQ_MAX_Q);
 }
 
 type StateListener = (state: PlaybackState) => void;
@@ -75,6 +96,7 @@ export class TapeAudioEngine {
   private peakMeterNode: AudioWorkletNode | null = null;
   private peakMeterSink: GainNode | null = null;
   private eqFilters: BiquadFilterNode[] = [];
+  private bassSpectrumData: Uint8Array<ArrayBuffer> | null = null;
 
   private trackId: string | null = null;
   private duration = 0;
@@ -86,7 +108,7 @@ export class TapeAudioEngine {
   private reverbWet = 0.25;
 
   private eqEnabled = false;
-  private eqBandGains: EqBandGains = [0, 0, 0, 0, 0];
+  private eqBands: EqBand[] = createDefaultEqBands();
   private eqPresetName: EqPresetName | null = "Flat";
   private quality: QualityState = createDefaultQualityState();
   private clipWarning = false;
@@ -143,6 +165,65 @@ export class TapeAudioEngine {
       left: this.leftAnalyser,
       right: this.rightAnalyser
     };
+  }
+
+  getEqGraphCurve(pointCount = 320): EqGraphCurve | null {
+    if (this.eqFilters.length === 0) return null;
+
+    const points = clamp(Math.floor(pointCount), 64, 1024);
+    const frequencies = new Float32Array(points);
+    const combinedMagnitude = new Float32Array(points);
+    combinedMagnitude.fill(1);
+
+    const scratchMagnitude = new Float32Array(points);
+    const scratchPhase = new Float32Array(points);
+
+    const minLog = Math.log10(EQ_MIN_FREQ);
+    const maxLog = Math.log10(EQ_MAX_FREQ);
+
+    for (let i = 0; i < points; i += 1) {
+      const t = i / (points - 1);
+      frequencies[i] = 10 ** (minLog + t * (maxLog - minLog));
+    }
+
+    for (const node of this.eqFilters) {
+      node.getFrequencyResponse(frequencies, scratchMagnitude, scratchPhase);
+      for (let i = 0; i < points; i += 1) {
+        combinedMagnitude[i] *= Math.max(1e-12, scratchMagnitude[i]);
+      }
+    }
+
+    const gainsDb = Array.from(combinedMagnitude, (value) => 20 * Math.log10(Math.max(value, 1e-12)));
+    return {
+      frequencies: Array.from(frequencies),
+      gainsDb
+    };
+  }
+
+  getBassReactiveLevel(lowHz = 70, highHz = 300): number {
+    if (!this.context || !this.analyser || !this.isPlaying) return 0;
+
+    const analyser = this.analyser;
+    const binCount = analyser.frequencyBinCount;
+    if (!this.bassSpectrumData || this.bassSpectrumData.length !== binCount) {
+      this.bassSpectrumData = new Uint8Array(new ArrayBuffer(binCount));
+    }
+
+    analyser.getByteFrequencyData(this.bassSpectrumData);
+
+    const nyquist = this.context.sampleRate * 0.5;
+    const low = clamp(Math.floor((lowHz / nyquist) * binCount), 0, binCount - 1);
+    const high = clamp(Math.ceil((highHz / nyquist) * binCount), low + 1, binCount);
+
+    let sum = 0;
+    let count = 0;
+    for (let i = low; i < high; i += 1) {
+      sum += this.bassSpectrumData[i];
+      count += 1;
+    }
+
+    if (count === 0) return 0;
+    return clamp(sum / (count * 255), 0, 1);
   }
 
   async ensureContext(): Promise<void> {
@@ -425,16 +506,43 @@ export class TapeAudioEngine {
   setEqEnabled(enabled: boolean): void {
     this.eqEnabled = enabled;
     this.reconnectActiveSourcePath();
+    this.applyEqCurve();
     this.updateMixAndSafety();
     this.emitState();
   }
 
   setEqBandGain(index: number, gainDb: number): void {
-    if (index < 0 || index >= this.eqBandGains.length) return;
+    if (index < 0 || index >= this.eqBands.length) return;
+    const band = this.eqBands[index];
+    if (!bandSupportsGain(band.type)) return;
+    this.setEqBandConfig(band.id, { gainDb });
+  }
 
-    const next = [...this.eqBandGains] as EqBandGains;
-    next[index] = clampEqGain(gainDb);
-    this.eqBandGains = next;
+  setEqBandConfig(
+    bandId: string,
+    patch: Partial<Pick<EqBand, "enabled" | "frequency" | "gainDb" | "q">>
+  ): void {
+    const index = this.eqBands.findIndex((band) => band.id === bandId);
+    if (index < 0) return;
+
+    const current = this.eqBands[index];
+    const next: EqBand = {
+      ...current,
+      enabled: typeof patch.enabled === "boolean" ? patch.enabled : current.enabled,
+      frequency:
+        typeof patch.frequency === "number"
+          ? clampEqFrequency(patch.frequency)
+          : current.frequency,
+      gainDb:
+        typeof patch.gainDb === "number"
+          ? clampEqGain(patch.gainDb)
+          : current.gainDb,
+      q: typeof patch.q === "number" ? clampEqQ(patch.q) : current.q
+    };
+
+    const updated = [...this.eqBands];
+    updated[index] = next;
+    this.eqBands = updated;
     this.eqPresetName = null;
 
     this.applyEqCurve();
@@ -442,20 +550,44 @@ export class TapeAudioEngine {
     this.emitState();
   }
 
-  setEqBandGains(gains: readonly number[], presetName: EqPresetName | null = null): void {
-    if (gains.length !== this.eqBandGains.length) return;
-
-    this.eqBandGains = gains.map((gain) => clampEqGain(gain)) as EqBandGains;
+  setEqBands(bands: readonly EqBand[], presetName: EqPresetName | null = null): void {
+    this.eqBands = sanitizeEqBands(bands);
     this.eqPresetName = presetName;
+    this.applyEqCurve();
+    this.updateMixAndSafety();
+    this.emitState();
+  }
 
+  setEqBandGains(gains: readonly number[], presetName: EqPresetName | null = null): void {
+    const gainBandIds = this.eqBands
+      .filter((band) => bandSupportsGain(band.type))
+      .map((band) => band.id);
+
+    if (gains.length === 0 || gainBandIds.length === 0) return;
+
+    const nextBands = this.eqBands.map((band) => ({ ...band }));
+    let gainIndex = 0;
+    for (const bandId of gainBandIds) {
+      if (gainIndex >= gains.length) break;
+      const band = nextBands.find((item) => item.id === bandId);
+      if (!band) continue;
+      band.gainDb = clampEqGain(gains[gainIndex]);
+      gainIndex += 1;
+    }
+
+    this.eqBands = sanitizeEqBands(nextBands);
+    this.eqPresetName = presetName;
     this.applyEqCurve();
     this.updateMixAndSafety();
     this.emitState();
   }
 
   setEqPreset(presetName: EqPresetName): void {
-    const preset = EQ_PRESETS[presetName];
-    this.setEqBandGains(preset, presetName);
+    this.eqBands = applyEqPreset(this.eqBands, presetName);
+    this.eqPresetName = presetName;
+    this.applyEqCurve();
+    this.updateMixAndSafety();
+    this.emitState();
   }
 
   clearTrack(trackId?: string): void {
@@ -502,6 +634,7 @@ export class TapeAudioEngine {
     this.peakMeterDisabled = false;
     this.trackLoading = false;
     this.irLoading = false;
+    this.bassSpectrumData = null;
     this.quality = createDefaultQualityState();
 
     if (this.context && this.context.state !== "closed") {
@@ -524,35 +657,16 @@ export class TapeAudioEngine {
 
     this.analyser.fftSize = 2048;
     this.analyser.smoothingTimeConstant = 0.12;
-    this.leftAnalyser.fftSize = 2048;
-    this.leftAnalyser.smoothingTimeConstant = 0.12;
-    this.rightAnalyser.fftSize = 2048;
-    this.rightAnalyser.smoothingTimeConstant = 0.12;
+    this.leftAnalyser.fftSize = 1024;
+    this.leftAnalyser.smoothingTimeConstant = 0.02;
+    this.rightAnalyser.fftSize = 1024;
+    this.rightAnalyser.smoothingTimeConstant = 0.02;
 
-    const lowShelf = ctx.createBiquadFilter();
-    lowShelf.type = "lowshelf";
-    lowShelf.frequency.value = 100;
-
-    const lowMid = ctx.createBiquadFilter();
-    lowMid.type = "peaking";
-    lowMid.frequency.value = 250;
-    lowMid.Q.value = 1.0;
-
-    const mid = ctx.createBiquadFilter();
-    mid.type = "peaking";
-    mid.frequency.value = 1000;
-    mid.Q.value = 1.0;
-
-    const highMid = ctx.createBiquadFilter();
-    highMid.type = "peaking";
-    highMid.frequency.value = 4000;
-    highMid.Q.value = 1.0;
-
-    const highShelf = ctx.createBiquadFilter();
-    highShelf.type = "highshelf";
-    highShelf.frequency.value = 10000;
-
-    this.eqFilters = [lowShelf, lowMid, mid, highMid, highShelf];
+    this.eqFilters = this.eqBands.map((band) => {
+      const node = ctx.createBiquadFilter();
+      node.type = band.type;
+      return node;
+    });
 
     for (let i = 0; i < this.eqFilters.length - 1; i += 1) {
       this.eqFilters[i].connect(this.eqFilters[i + 1]);
@@ -569,6 +683,8 @@ export class TapeAudioEngine {
     this.masterGain.connect(this.stereoSplitter);
     this.stereoSplitter.connect(this.leftAnalyser, 0);
     this.stereoSplitter.connect(this.rightAnalyser, 1);
+
+    this.applyEqCurve();
   }
 
   private async setupMonitoringGraph(): Promise<void> {
@@ -677,8 +793,38 @@ export class TapeAudioEngine {
     if (!this.context || this.eqFilters.length === 0) return;
 
     const now = this.context.currentTime;
+    const lowpassBypassFreq = Math.min(
+      LOWPASS_BYPASS_FREQ,
+      this.context.sampleRate * 0.49
+    );
+
     for (let i = 0; i < this.eqFilters.length; i += 1) {
-      this.eqFilters[i].gain.setTargetAtTime(this.eqBandGains[i], now, 0.015);
+      const band = this.eqBands[i];
+      const node = this.eqFilters[i];
+      if (!band || !node) continue;
+
+      node.type = band.type;
+
+      const isActive = this.eqEnabled && band.enabled;
+      let frequency = clampEqFrequency(band.frequency);
+      let q = clampEqQ(band.q);
+      let gainDb = bandSupportsGain(band.type) ? clampEqGain(band.gainDb) : 0;
+
+      if (!isActive) {
+        if (band.type === "highpass") {
+          frequency = HIGHPASS_BYPASS_FREQ;
+          q = 0.707;
+        } else if (band.type === "lowpass") {
+          frequency = lowpassBypassFreq;
+          q = 0.707;
+        } else {
+          gainDb = 0;
+        }
+      }
+
+      node.frequency.setTargetAtTime(frequency, now, 0.015);
+      node.Q.setTargetAtTime(q, now, 0.015);
+      node.gain.setTargetAtTime(gainDb, now, 0.015);
     }
   }
 
@@ -690,7 +836,13 @@ export class TapeAudioEngine {
     const dry = clamp(1 - effectiveWet, 0.4, 1.0);
 
     const maxEqBoostDb = this.eqEnabled
-      ? Math.max(0, ...this.eqBandGains.map((gain) => Math.max(0, gain)))
+      ? Math.max(
+        0,
+        ...this.eqBands.map((band) => {
+          if (!band.enabled || !bandSupportsGain(band.type)) return 0;
+          return Math.max(0, band.gainDb);
+        })
+      )
       : 0;
 
     const safeMaster = clamp(
@@ -797,9 +949,9 @@ export class TapeAudioEngine {
       reverbPresetId: this.reverbPresetId,
       reverbWet: this.reverbWet,
       eqEnabled: this.eqEnabled,
-      eqBandGains: this.eqBandGains,
+      eqBands: this.eqBands,
       eqPresetName: this.eqPresetName,
-      quality: { ...this.quality },
+      quality: this.quality,
       clipWarning: this.clipWarning
     };
   }

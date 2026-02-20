@@ -1,4 +1,4 @@
-﻿const SUPPORTED_EXTENSIONS = [".wav", ".mp3", ".flac"];
+﻿const SUPPORTED_EXTENSIONS = [".wav", ".mp3", ".flac", ".m4a", ".aac", ".alac"];
 
 export function isSupportedAudioFileName(fileName: string): boolean {
   const lower = fileName.toLowerCase();
@@ -42,7 +42,16 @@ export function getMimeFromFileName(fileName: string): string {
   if (lower.endsWith(".wav")) return "audio/wav";
   if (lower.endsWith(".mp3")) return "audio/mpeg";
   if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".aac")) return "audio/aac";
+  if (lower.endsWith(".alac")) return "audio/alac";
   return "application/octet-stream";
+}
+
+export function getAudioFileExtension(fileName: string): string | null {
+  const match = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (!match) return null;
+  return match[1];
 }
 
 export async function probeDurationFromFile(file: File): Promise<number> {

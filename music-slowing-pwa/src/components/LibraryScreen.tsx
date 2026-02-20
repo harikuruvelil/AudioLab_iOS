@@ -8,6 +8,7 @@ interface LibraryScreenProps {
   onImportFiles: (files: FileList | null) => Promise<void> | void;
   onDeleteTrack: (trackId: string) => Promise<void> | void;
   onPlayTrack: (trackId: string) => Promise<void> | void;
+  onQueueTrack: (trackId: string) => void;
   storage: StorageSummary;
   importing: boolean;
 }
@@ -18,6 +19,7 @@ export function LibraryScreen({
   onImportFiles,
   onDeleteTrack,
   onPlayTrack,
+  onQueueTrack,
   storage,
   importing
 }: LibraryScreenProps) {
@@ -47,7 +49,7 @@ export function LibraryScreen({
           type="file"
           hidden
           multiple
-          accept=".wav,.mp3,.flac,audio/wav,audio/mpeg,audio/flac"
+          accept=".wav,.mp3,.flac,.m4a,.aac,.alac,audio/wav,audio/mpeg,audio/flac,audio/mp4,audio/aac,audio/alac"
           onChange={(event) => {
             void onImportFiles(event.currentTarget.files);
             event.currentTarget.value = "";
@@ -62,7 +64,7 @@ export function LibraryScreen({
 
       {tracks.length === 0 ? (
         <p className="empty-state">
-          No tracks yet. Import WAV, MP3, or FLAC from the iOS Files picker.
+          No tracks yet. Import WAV, FLAC, ALAC, MP3, AAC, or M4A from the iOS Files picker.
         </p>
       ) : (
         <ul className="track-list">
@@ -84,20 +86,32 @@ export function LibraryScreen({
                 </span>
               </button>
 
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => {
-                  const ok = window.confirm(
-                    `Delete "${track.displayName}" from your library?`
-                  );
-                  if (ok) {
-                    void onDeleteTrack(track.id);
-                  }
-                }}
-              >
-                Delete
-              </button>
+              <div className="track-actions">
+                <button
+                  type="button"
+                  className="queue-button"
+                  onClick={() => {
+                    onQueueTrack(track.id);
+                  }}
+                >
+                  Queue
+                </button>
+
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => {
+                    const ok = window.confirm(
+                      `Delete "${track.displayName}" from your library?`
+                    );
+                    if (ok) {
+                      void onDeleteTrack(track.id);
+                    }
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
             </li>
           ))}
         </ul>

@@ -30,7 +30,22 @@ export type ReverbPresetId =
 
 export type EqPresetName = "Flat" | "Bass Boost" | "Vocal" | "Treble Boost";
 
-export type EqBandGains = [number, number, number, number, number];
+export type EqBandType = "highpass" | "lowshelf" | "peaking" | "highshelf" | "lowpass";
+
+export interface EqBand {
+  id: string;
+  label: string;
+  type: EqBandType;
+  frequency: number;
+  gainDb: number;
+  q: number;
+  enabled: boolean;
+}
+
+export interface EqGraphCurve {
+  frequencies: number[];
+  gainsDb: number[];
+}
 
 export type RepeatMode = "off" | "one" | "all";
 export type WaveformMode = "linear" | "circular" | "vectorscope";
@@ -56,7 +71,7 @@ export interface PlaybackState {
   reverbPresetId: ReverbPresetId;
   reverbWet: number;
   eqEnabled: boolean;
-  eqBandGains: EqBandGains;
+  eqBands: EqBand[];
   eqPresetName: EqPresetName | null;
   quality: QualityState;
   clipWarning: boolean;
