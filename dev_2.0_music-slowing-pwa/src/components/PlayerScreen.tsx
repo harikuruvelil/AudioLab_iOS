@@ -394,15 +394,12 @@ export function PlayerScreen({
     if (!context2d) return;
     context2d.imageSmoothingEnabled = false;
 
-    const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
     const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
 
-    // Keep overlays lighter, but allow high-refresh waveform on capable devices.
+    // Honor the selected FPS directly to avoid hidden frame-rate downgrades.
     const isMobile = typeof window.matchMedia === "function"
       && window.matchMedia("(pointer: coarse)").matches;
-    const targetFps = uiOverlayOpen
-      ? Math.max(24, Math.min(requestedFps, isMobile ? 60 : 72))
-      : requestedFps;
+    const targetFps = requestedFps;
     const highRefreshMode = targetFps >= 96;
     const ultraRefreshMode = targetFps >= 115;
     // Disable glow passes on mobile. They are the most expensive canvas effect on iOS.

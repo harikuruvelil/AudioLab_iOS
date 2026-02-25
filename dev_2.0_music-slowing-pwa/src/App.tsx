@@ -183,6 +183,7 @@ interface PersistedAudioSettings {
   waveformEnabled: boolean;
   waveformMode: WaveformMode;
   waveformTargetFps: number;
+  waveformTargetFpsUserSet?: boolean;
   waveformColor: string;
   backgroundMotionEnabled: boolean;
   backgroundBassReactiveEnabled: boolean;
@@ -347,8 +348,9 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
       waveformModeRaw === "circular"
       ? waveformModeRaw
       : "linear";
+  const waveformTargetFpsUserSet = value.waveformTargetFpsUserSet === true;
   const waveformTargetFps =
-    typeof value.waveformTargetFps === "number"
+    waveformTargetFpsUserSet && typeof value.waveformTargetFps === "number"
       ? clamp(Math.round(value.waveformTargetFps), 24, 120)
       : 120;
   const waveformColor = sanitizeWaveformColor(value.waveformColor);
@@ -1021,6 +1023,7 @@ export default function App() {
       waveformEnabled,
       waveformMode,
       waveformTargetFps,
+      waveformTargetFpsUserSet: true,
       waveformColor,
       backgroundMotionEnabled,
       backgroundBassReactiveEnabled,
