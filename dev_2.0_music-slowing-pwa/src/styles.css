@@ -50,6 +50,9 @@
   /* bg animation */
   --bg-energy: 0;
   --bg-pulse: 0;
+  --bg-band-low: 0;
+  --bg-band-mid: 0;
+  --bg-band-high: 0;
   --bg-orb-x: 52%;
   --bg-orb-y: 24%;
   --bg-orb2-x: 68%;
@@ -58,6 +61,7 @@
   --bg-flow-shift-x: 0%;
   --bg-flow-shift-y: 0%;
   --bg-flow-angle-offset: 0deg;
+  --bg-flow-distort: 0;
   --bg-reaction: 1;
   --bg-morph: 0.2;
 }
@@ -219,167 +223,165 @@ button {
   }
 }
 
-/* ─── aurora background (GPU CSS orbs – bass-reactive) ─── */
+/* liquid gradient flow background */
 .aurora-bg {
   position: absolute;
-  inset: -20%;
+  inset: -12% -16%;
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
   border-radius: inherit;
-  /* Bass reactive: shift the entire aurora container and blur */
-  transform: translate(var(--bg-flow-shift-x, 0%),
-      var(--bg-flow-shift-y, 0%));
-  /* Sharpen on bass hits: blur reduces from 55 → 30 at full pulse */
-  filter: blur(calc(55px - 25px * var(--bg-pulse, 0)));
-  transition: filter 0.12s ease-out;
+  transform: translate(var(--bg-flow-shift-x), var(--bg-flow-shift-y));
+  filter: saturate(calc(120% + var(--bg-band-high) * 55%));
 }
 
 .aurora-bg::after {
-  /* Dark overlay dims on bass hits for brighter punchthrough */
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(4, 8, 18, calc(0.45 - 0.15 * var(--bg-pulse, 0)));
-  z-index: 1;
-  transition: background 0.15s ease-out;
+  background: linear-gradient(
+    175deg,
+    rgba(2, 5, 12, calc(0.22 - var(--bg-pulse) * 0.1)),
+    rgba(2, 5, 12, calc(0.50 - var(--bg-band-low) * 0.12))
+  );
 }
 
-
-
-
-.aurora-orb {
+.flow-ribbon {
   position: absolute;
-  border-radius: 50%;
+  top: 12%;
+  left: 3%;
+  width: 94%;
+  height: 76%;
+  border-radius: 36% 64% 53% 47% / 44% 38% 62% 56%;
   mix-blend-mode: screen;
-  will-change: transform, opacity;
-  /* Bass reactive: all orbs scale up with energy */
-  --bass-scale: calc(1 + 0.15 * var(--bg-energy, 0));
-  scale: var(--bass-scale);
-  transition: opacity 0.15s ease-out, scale 0.18s ease-out;
+  will-change: transform, filter, opacity;
+  transform-origin: 50% 50%;
+  filter: hue-rotate(calc(var(--bg-flow-distort) * 6deg));
+  mask-image: radial-gradient(120% 84% at 50% 50%, black 40%, transparent 80%);
+  -webkit-mask-image: radial-gradient(120% 84% at 50% 50%, black 40%, transparent 80%);
 }
 
-/* Orb 1 – large, accent, floats top-left → bottom-right */
-.aurora-orb-1 {
-  width: 75%;
-  height: 90%;
-  top: -20%;
-  left: -10%;
-  background: radial-gradient(ellipse at center,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 40%, transparent) 50%,
-      transparent 75%);
-  opacity: calc(0.75 + 0.25 * var(--bg-pulse, 0));
-  animation: auroraOrb1 7s ease-in-out infinite alternate;
+.flow-ribbon::before,
+.flow-ribbon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
 }
 
-/* Orb 2 – large, accent-2, floats top-right → bottom-left */
-.aurora-orb-2 {
-  width: 80%;
-  height: 85%;
-  top: 5%;
-  right: -15%;
-  background: radial-gradient(ellipse at center,
-      var(--accent-2) 0%,
-      color-mix(in srgb, var(--accent-2) 35%, transparent) 50%,
-      transparent 75%);
-  opacity: calc(0.65 + 0.35 * var(--bg-pulse, 0));
-  animation: auroraOrb2 11s ease-in-out infinite alternate;
+.flow-ribbon::before {
+  background:
+    linear-gradient(
+      calc(118deg + var(--bg-flow-angle-offset)),
+      color-mix(in srgb, var(--accent) 70%, transparent) 0%,
+      color-mix(in srgb, var(--accent-2) 62%, transparent) 34%,
+      color-mix(in srgb, var(--theme-tint) 95%, transparent) 64%,
+      color-mix(in srgb, var(--accent) 58%, transparent) 100%
+    ),
+    radial-gradient(55% 48% at 26% 32%, color-mix(in srgb, var(--accent-2) 70%, transparent), transparent 78%),
+    radial-gradient(50% 60% at 74% 66%, color-mix(in srgb, var(--accent) 74%, transparent), transparent 82%);
+  filter: blur(calc(20px - var(--bg-band-high) * 10px));
 }
 
-/* Orb 3 – medium, accent blend, bottom-center anchor */
-.aurora-orb-3 {
-  width: 65%;
-  height: 70%;
-  bottom: -15%;
-  left: 15%;
-  background: radial-gradient(ellipse at center,
-      color-mix(in srgb, var(--accent) 55%, var(--accent-2)) 0%,
-      color-mix(in srgb, var(--accent) 25%, transparent) 55%,
-      transparent 78%);
-  opacity: calc(0.55 + 0.45 * var(--bg-pulse, 0));
-  animation: auroraOrb3 9s ease-in-out infinite alternate;
+.flow-ribbon::after {
+  background:
+    repeating-linear-gradient(
+      calc(132deg + var(--bg-flow-angle-offset)),
+      rgba(255, 255, 255, 0.16) 0px,
+      rgba(255, 255, 255, 0.05) 18px,
+      rgba(255, 255, 255, 0) 42px
+    ),
+    linear-gradient(
+      calc(206deg - var(--bg-flow-angle-offset)),
+      color-mix(in srgb, var(--accent) 68%, transparent),
+      color-mix(in srgb, var(--accent-2) 70%, transparent)
+    );
+  opacity: calc(0.24 + var(--bg-band-high) * 0.28);
+  filter: blur(calc(6px - var(--bg-band-high) * 2px));
 }
 
-/* Orb 4 – smaller, accent-2 tint, wanders center */
-.aurora-orb-4 {
-  width: 50%;
-  height: 60%;
-  top: 20%;
-  left: 25%;
-  background: radial-gradient(ellipse at center,
-      color-mix(in srgb, var(--accent-2) 60%, var(--accent)) 0%,
-      color-mix(in srgb, var(--accent-2) 20%, transparent) 55%,
-      transparent 80%);
-  opacity: calc(0.45 + 0.55 * var(--bg-pulse, 0));
-  animation: auroraOrb4 14s ease-in-out infinite alternate;
+.flow-ribbon-back {
+  opacity: calc(0.38 + var(--bg-band-low) * 0.44);
+  transform:
+    translate(
+      calc(-6% + var(--bg-flow-shift-x) * 0.55),
+      calc(5% + var(--bg-flow-shift-y) * 0.5)
+    )
+    rotate(calc(-7deg + var(--bg-flow-angle-offset) * 0.55))
+    scale(
+      calc(0.92 + var(--bg-band-low) * 0.24 + var(--bg-flow-distort) * 0.05),
+      calc(0.74 + var(--bg-band-low) * 0.30 + var(--bg-flow-distort) * 0.08)
+    );
+  animation: flowRibbonBack 14s ease-in-out infinite alternate;
 }
 
-@keyframes auroraOrb1 {
+.flow-ribbon-mid {
+  opacity: calc(0.46 + var(--bg-band-mid) * 0.34);
+  transform:
+    translate(
+      calc(2% + var(--bg-flow-shift-x) * 0.9),
+      calc(-1% + var(--bg-flow-shift-y) * 0.85)
+    )
+    rotate(calc(2deg + var(--bg-flow-angle-offset) * 0.8))
+    scale(
+      calc(1 + var(--bg-band-mid) * 0.22 + var(--bg-flow-distort) * 0.04),
+      calc(0.84 + var(--bg-band-mid) * 0.34 + var(--bg-flow-distort) * 0.08)
+    );
+  animation: flowRibbonMid 10s ease-in-out infinite alternate;
+}
+
+.flow-ribbon-front {
+  opacity: calc(0.34 + var(--bg-band-high) * 0.5 + var(--bg-pulse) * 0.16);
+  transform:
+    translate(
+      calc(8% - var(--bg-flow-shift-x) * 0.5),
+      calc(-6% + var(--bg-flow-shift-y) * 0.45)
+    )
+    rotate(calc(6deg - var(--bg-flow-angle-offset) * 0.45))
+    scale(
+      calc(0.94 + var(--bg-band-high) * 0.16 + var(--bg-flow-distort) * 0.05),
+      calc(0.7 + var(--bg-band-high) * 0.27 + var(--bg-flow-distort) * 0.07)
+    );
+  animation: flowRibbonFront 8s ease-in-out infinite alternate;
+}
+
+.flow-speckle {
+  position: absolute;
+  inset: 8% 10%;
+  opacity: calc(0.07 + var(--bg-band-high) * 0.15);
+  background:
+    radial-gradient(circle at 16% 28%, rgba(255, 255, 255, 0.75) 0.7px, transparent 2px),
+    radial-gradient(circle at 38% 68%, rgba(255, 255, 255, 0.7) 0.8px, transparent 2.1px),
+    radial-gradient(circle at 66% 34%, rgba(255, 255, 255, 0.68) 0.75px, transparent 2px),
+    radial-gradient(circle at 84% 60%, rgba(255, 255, 255, 0.7) 0.8px, transparent 2.2px);
+  transform: translateY(calc(var(--bg-flow-shift-y) * 0.5));
+  filter: blur(0.2px);
+}
+
+@keyframes flowRibbonBack {
   0% {
-    transform: translate(0%, 0%) scale(1.00);
+    border-radius: 36% 64% 53% 47% / 44% 38% 62% 56%;
   }
-
-  33% {
-    transform: translate(18%, -12%) scale(1.08);
-  }
-
-  66% {
-    transform: translate(-8%, 20%) scale(0.94);
-  }
-
   100% {
-    transform: translate(30%, 8%) scale(1.05);
+    border-radius: 47% 53% 44% 56% / 38% 56% 44% 62%;
   }
 }
 
-@keyframes auroraOrb2 {
+@keyframes flowRibbonMid {
   0% {
-    transform: translate(0%, 0%) scale(1.00);
+    border-radius: 42% 58% 52% 48% / 46% 36% 64% 54%;
   }
-
-  40% {
-    transform: translate(-22%, 15%) scale(1.10);
-  }
-
-  75% {
-    transform: translate(12%, -20%) scale(0.90);
-  }
-
   100% {
-    transform: translate(-30%, 5%) scale(1.04);
+    border-radius: 54% 46% 41% 59% / 41% 57% 43% 59%;
   }
 }
 
-@keyframes auroraOrb3 {
+@keyframes flowRibbonFront {
   0% {
-    transform: translate(0%, 0%) scale(1.00);
+    border-radius: 38% 62% 50% 50% / 52% 34% 66% 48%;
   }
-
-  50% {
-    transform: translate(20%, -18%) scale(1.12);
-  }
-
   100% {
-    transform: translate(-15%, 12%) scale(0.92);
-  }
-}
-
-@keyframes auroraOrb4 {
-  0% {
-    transform: translate(0%, 0%) scale(1.00);
-  }
-
-  30% {
-    transform: translate(-18%, 14%) scale(1.06);
-  }
-
-  70% {
-    transform: translate(22%, -10%) scale(0.96);
-  }
-
-  100% {
-    transform: translate(10%, 20%) scale(1.08);
+    border-radius: 52% 48% 61% 39% / 34% 61% 39% 66%;
   }
 }
 
@@ -1210,11 +1212,9 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   display: flex;
   align-items: flex-end;
   justify-content: stretch;
-  padding-top: env(safe-area-inset-top);
   /* CRITICAL: do NOT set overflow-y here — iOS eats touch events on the overlay */
   overflow: hidden;
-  overscroll-behavior: none;
-  touch-action: none;
+  overscroll-behavior: contain;
   animation: overlayFadeIn 250ms var(--ease-out-expo) both;
 }
 
@@ -1240,16 +1240,17 @@ input[type="range"]:disabled::-webkit-slider-thumb {
     linear-gradient(180deg, rgba(10, 16, 28, 0.78), rgba(6, 10, 20, 0.75));
   box-shadow: var(--shadow-lg), 0 0 0 0.5px rgba(0, 0, 0, 0.40);
   backdrop-filter: var(--glass-blur-heavy);
-  padding: 6px 14px calc(28px + env(safe-area-inset-bottom));
-  max-height: calc(100vh - env(safe-area-inset-top) - 4px);
-  max-height: calc(100dvh - env(safe-area-inset-top) - 4px);
-  height: min(94vh, calc(100dvh - env(safe-area-inset-top) - 4px));
+  padding: 6px 14px calc(64px + env(safe-area-inset-bottom));
+  max-height: calc(100vh - env(safe-area-inset-top));
+  max-height: calc(100dvh - env(safe-area-inset-top));
+  height: calc(100vh - env(safe-area-inset-top));
+  height: calc(100dvh - env(safe-area-inset-top));
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   scroll-padding-top: 74px;
-  scroll-padding-bottom: calc(28px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(72px + env(safe-area-inset-bottom));
   touch-action: pan-y;
   -webkit-touch-callout: none;
   min-height: 0;
@@ -1311,15 +1312,15 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 
 .queue-sheet,
 .appearance-sheet {
-  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
 }
 
 .appearance-sheet {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: auto;
-  max-height: calc(100vh - env(safe-area-inset-top) - 4px);
-  max-height: calc(100dvh - env(safe-area-inset-top) - 4px);
+  max-height: calc(100vh - env(safe-area-inset-top));
+  max-height: calc(100dvh - env(safe-area-inset-top));
 }
 
 .queue-sheet {
@@ -1335,7 +1336,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 .queue-list {
   list-style: none;
   margin: 0;
-  padding: 0 0 calc(24px + env(safe-area-inset-bottom));
+  padding: 0 0 calc(56px + env(safe-area-inset-bottom));
   display: grid;
   gap: 8px;
   overflow: visible;
@@ -1386,7 +1387,11 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 .appearance-grid {
   display: grid;
   gap: 8px;
-  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+.settings-sheet > :last-child {
+  margin-bottom: 8px;
 }
 
 .appearance-option {

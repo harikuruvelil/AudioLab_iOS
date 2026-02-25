@@ -262,6 +262,27 @@ export function PlayerScreen({
   }, [isAppearanceOpen, isQueueOpen, isSettingsOpen]);
 
   useEffect(() => {
+    const hasOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
+    if (!hasOverlayOpen) return;
+
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+    const previousHtmlOverscroll = htmlEl.style.overscrollBehavior;
+    const previousBodyOverflow = bodyEl.style.overflow;
+    const previousBodyOverscroll = bodyEl.style.overscrollBehavior;
+
+    htmlEl.style.overscrollBehavior = "none";
+    bodyEl.style.overflow = "hidden";
+    bodyEl.style.overscrollBehavior = "none";
+
+    return () => {
+      htmlEl.style.overscrollBehavior = previousHtmlOverscroll;
+      bodyEl.style.overflow = previousBodyOverflow;
+      bodyEl.style.overscrollBehavior = previousBodyOverscroll;
+    };
+  }, [isAppearanceOpen, isQueueOpen, isSettingsOpen]);
+
+  useEffect(() => {
     if (playback.eqBands.length === 0) {
       setSelectedEqBandId(null);
       return;
@@ -373,7 +394,14 @@ export function PlayerScreen({
     if (!context2d) return;
     context2d.imageSmoothingEnabled = false;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
+    const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
+    const targetFps = uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps;
+    const highRefreshMode = targetFps >= 96;
+    const ultraRefreshMode = targetFps >= 115;
+    const dpr = highRefreshMode
+      ? Math.min(window.devicePixelRatio || 1, 1.35)
+      : Math.min(window.devicePixelRatio || 1, 2);
     const rgb = hexToRgb(waveformColor);
     const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.92)`;
     const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.85)`;
@@ -430,7 +458,9 @@ export function PlayerScreen({
       const width = frameWidth;
       const height = frameHeight;
       // Use more points for higher fidelity at 120Hz
-      const maxPoints = Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
+      const maxPoints = highRefreshMode
+        ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
+        : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
       const totalPoints = Math.floor(waveform.length / stride);
 
@@ -459,19 +489,21 @@ export function PlayerScreen({
         }
       }
 
-      // ─── Glow bloom pass (outer) ───
-      context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.55)`;
-      context2d.shadowBlur = 22 * dpr;
-      context2d.lineWidth = Math.max(3.5, dpr * 2.5);
-      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
-      context2d.stroke();
+      if (!highRefreshMode) {
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.55)`;
+        context2d.shadowBlur = 22 * dpr;
+        context2d.lineWidth = Math.max(3.5, dpr * 2.5);
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
+        context2d.stroke();
+      }
 
-      // ─── Inner glow pass ───
-      context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.70)`;
-      context2d.shadowBlur = 8 * dpr;
-      context2d.lineWidth = Math.max(2.2, dpr * 1.5);
-      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.40)`;
-      context2d.stroke();
+      if (!ultraRefreshMode) {
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.70)`;
+        context2d.shadowBlur = highRefreshMode ? 5 * dpr : 8 * dpr;
+        context2d.lineWidth = Math.max(2.2, dpr * 1.5);
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.40)`;
+        context2d.stroke();
+      }
       context2d.shadowBlur = 0;
 
       // ─── Crisp foreground pass ───
@@ -494,7 +526,9 @@ export function PlayerScreen({
       const cy = height * 0.5;
       const baseRadius = Math.min(width, height) * 0.28;
       const amplitudeScale = Math.min(width, height) * 0.14;
-      const maxPoints = Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
+      const maxPoints = highRefreshMode
+        ? Math.max(180, Math.min(520, Math.floor(width / Math.max(1.0, dpr * 1.1))))
+        : Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
 
       context2d.beginPath();
@@ -512,12 +546,13 @@ export function PlayerScreen({
       }
       context2d.closePath();
 
-      // Glow pass
-      context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.50)`;
-      context2d.shadowBlur = 14 * dpr;
-      context2d.lineWidth = Math.max(2, dpr * 1.4);
-      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.25)`;
-      context2d.stroke();
+      if (!ultraRefreshMode) {
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.50)`;
+        context2d.shadowBlur = highRefreshMode ? 8 * dpr : 14 * dpr;
+        context2d.lineWidth = Math.max(2, dpr * 1.4);
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.25)`;
+        context2d.stroke();
+      }
       context2d.shadowBlur = 0;
 
       // Crisp foreground
@@ -531,10 +566,8 @@ export function PlayerScreen({
     let cachedAnalysers = getWaveformAnalysers();
     let analyserRefreshCounter = 0;
     let lastRenderedAt = 0;
-    const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
-    const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
-    const targetFps = uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps;
     const minFrameMs = 1000 / targetFps;
+    const analyserRefreshFrames = highRefreshMode ? 36 : Math.max(30, Math.floor(targetFps));
 
     const drawFrame = (timestamp: number) => {
       if (document.hidden) {
@@ -556,7 +589,7 @@ export function PlayerScreen({
 
         analyserRefreshCounter += 1;
         if (
-          analyserRefreshCounter >= Math.max(30, Math.floor(targetFps)) ||
+          analyserRefreshCounter >= analyserRefreshFrames ||
           (!cachedAnalysers.mono && !cachedAnalysers.left && !cachedAnalysers.right)
         ) {
           cachedAnalysers = getWaveformAnalysers();
@@ -1470,4 +1503,3 @@ export function PlayerScreen({
     </section>
   );
 }
-

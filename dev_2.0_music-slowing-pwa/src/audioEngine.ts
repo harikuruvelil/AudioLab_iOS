@@ -75,6 +75,14 @@ export interface WaveformAnalyserNodes {
   right: AnalyserNode | null;
 }
 
+export interface ReactiveEnergyProfile {
+  low: number;
+  mid: number;
+  high: number;
+  pulse: number;
+  overall: number;
+}
+
 export class TapeAudioEngine {
   private context: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
@@ -99,6 +107,8 @@ export class TapeAudioEngine {
   private bassSpectrumData: Uint8Array<ArrayBuffer> | null = null;
   private bassTimeDomainData: Uint8Array<ArrayBuffer> | null = null;
   private bassEnvelope = 0;
+  private reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+  private reactivePulseEnvelope = 0;
 
   private trackId: string | null = null;
   private duration = 0;
@@ -202,13 +212,26 @@ export class TapeAudioEngine {
     };
   }
 
-  getBassReactiveLevel(lowHz = 70, highHz = 300): number {
+  getReactiveEnergyProfile(lowHz = 70, highHz = 300): ReactiveEnergyProfile {
     if (!this.context || !this.analyser || !this.isPlaying) {
-      this.bassEnvelope *= 0.84;
-      if (this.bassEnvelope < 0.001) {
-        this.bassEnvelope = 0;
-      }
-      return this.bassEnvelope;
+      this.reactiveBandEnvelopes.low *= 0.86;
+      this.reactiveBandEnvelopes.mid *= 0.84;
+      this.reactiveBandEnvelopes.high *= 0.82;
+      this.reactivePulseEnvelope *= 0.8;
+      return {
+        low: this.reactiveBandEnvelopes.low,
+        mid: this.reactiveBandEnvelopes.mid,
+        high: this.reactiveBandEnvelopes.high,
+        pulse: this.reactivePulseEnvelope,
+        overall: clamp(
+          this.reactiveBandEnvelopes.low * 0.56 +
+          this.reactiveBandEnvelopes.mid * 0.27 +
+          this.reactiveBandEnvelopes.high * 0.17 +
+          this.reactivePulseEnvelope * 0.28,
+          0,
+          1
+        )
+      };
     }
 
     const analyser = this.analyser;
@@ -223,52 +246,105 @@ export class TapeAudioEngine {
 
     analyser.getByteFrequencyData(this.bassSpectrumData);
     analyser.getByteTimeDomainData(this.bassTimeDomainData);
+    const spectrumData = this.bassSpectrumData;
+    const timeDomainData = this.bassTimeDomainData;
 
     const nyquist = this.context.sampleRate * 0.5;
-    const safeLowHz = Math.max(12, Math.min(lowHz, highHz - 1));
+    const safeLowHz = Math.max(20, Math.min(lowHz, highHz - 1));
     const safeHighHz = Math.max(safeLowHz + 1, highHz);
+    const midBandHighHz = Math.min(1800, Math.max(safeHighHz + 90, safeHighHz * 3.2));
+    const highBandHighHz = Math.min(6200, Math.max(midBandHighHz + 220, midBandHighHz * 2.4));
 
-    const low = clamp(Math.floor((safeLowHz / nyquist) * binCount), 0, binCount - 1);
-    const high = clamp(Math.ceil((safeHighHz / nyquist) * binCount), low + 1, binCount);
+    const bandEnergy = (
+      lowBandHz: number,
+      highBandHz: number,
+      startWeight: number,
+      endWeight: number
+    ) => {
+      const low = clamp(Math.floor((lowBandHz / nyquist) * binCount), 0, binCount - 1);
+      const high = clamp(Math.ceil((highBandHz / nyquist) * binCount), low + 1, binCount);
+      let weightedSum = 0;
+      let weightTotal = 0;
+      for (let i = low; i < high; i += 1) {
+        const normalizedIndex = (i - low) / Math.max(1, high - low - 1);
+        const weight = startWeight + (endWeight - startWeight) * normalizedIndex;
+        weightedSum += (spectrumData[i] / 255) * weight;
+        weightTotal += weight;
+      }
+      return weightTotal > 0 ? weightedSum / weightTotal : 0;
+    };
 
-    let weightedSum = 0;
-    let weightTotal = 0;
-    for (let i = low; i < high; i += 1) {
-      const normalizedIndex = (i - low) / Math.max(1, high - low - 1);
-      const weight = 1.35 - normalizedIndex * 0.65;
-      weightedSum += (this.bassSpectrumData[i] / 255) * weight;
-      weightTotal += weight;
-    }
-    const weightedAverage = weightTotal > 0 ? weightedSum / weightTotal : 0;
-
-    const subHighHz = Math.min(safeHighHz, Math.max(safeLowHz + 1, 120));
-    const subHigh = clamp(Math.ceil((subHighHz / nyquist) * binCount), low + 1, high);
-    let subSum = 0;
-    let subCount = 0;
-    for (let i = low; i < subHigh; i += 1) {
-      subSum += this.bassSpectrumData[i] / 255;
-      subCount += 1;
-    }
-    const subAverage = subCount > 0 ? subSum / subCount : weightedAverage;
+    const lowEnergy = bandEnergy(safeLowHz, safeHighHz, 1.32, 0.72);
+    const midEnergy = bandEnergy(safeHighHz, midBandHighHz, 1.16, 0.86);
+    const highEnergy = bandEnergy(midBandHighHz, highBandHighHz, 1.06, 0.94);
 
     let rmsAccumulator = 0;
     let rmsCount = 0;
-    for (let i = 0; i < this.bassTimeDomainData.length; i += 2) {
-      const centered = (this.bassTimeDomainData[i] - 128) / 128;
+    for (let i = 0; i < timeDomainData.length; i += 2) {
+      const centered = (timeDomainData[i] - 128) / 128;
       rmsAccumulator += centered * centered;
       rmsCount += 1;
     }
     const rms = rmsCount > 0 ? Math.sqrt(rmsAccumulator / rmsCount) : 0;
-    const transient = clamp((rms - 0.015) * 8.5, 0, 1);
+    const transient = clamp((rms - 0.012) * 9.4, 0, 1);
 
-    const combined = clamp(
-      weightedAverage * 0.58 + subAverage * 0.27 + transient * 0.35,
+    const updateEnvelope = (current: number, next: number, attack: number, release: number) =>
+      current + (next - current) * (next > current ? attack : release);
+
+    this.reactiveBandEnvelopes.low = updateEnvelope(
+      this.reactiveBandEnvelopes.low,
+      lowEnergy,
+      0.46,
+      0.17
+    );
+    this.reactiveBandEnvelopes.mid = updateEnvelope(
+      this.reactiveBandEnvelopes.mid,
+      midEnergy,
+      0.39,
+      0.16
+    );
+    this.reactiveBandEnvelopes.high = updateEnvelope(
+      this.reactiveBandEnvelopes.high,
+      highEnergy,
+      0.33,
+      0.14
+    );
+
+    const pulseRaw = clamp(
+      transient * 0.72 +
+      Math.max(0, this.reactiveBandEnvelopes.low - this.reactiveBandEnvelopes.mid) * 0.55 +
+      this.reactiveBandEnvelopes.mid * 0.18,
       0,
       1
     );
-    const attack = combined > this.bassEnvelope ? 0.44 : 0.17;
-    this.bassEnvelope += (combined - this.bassEnvelope) * attack;
-    return clamp(this.bassEnvelope, 0, 1);
+    this.reactivePulseEnvelope = updateEnvelope(
+      this.reactivePulseEnvelope,
+      pulseRaw,
+      0.52,
+      0.2
+    );
+
+    const overall = clamp(
+      this.reactiveBandEnvelopes.low * 0.56 +
+      this.reactiveBandEnvelopes.mid * 0.27 +
+      this.reactiveBandEnvelopes.high * 0.17 +
+      this.reactivePulseEnvelope * 0.28,
+      0,
+      1
+    );
+
+    return {
+      low: clamp(this.reactiveBandEnvelopes.low, 0, 1),
+      mid: clamp(this.reactiveBandEnvelopes.mid, 0, 1),
+      high: clamp(this.reactiveBandEnvelopes.high, 0, 1),
+      pulse: clamp(this.reactivePulseEnvelope, 0, 1),
+      overall
+    };
+  }
+
+  getBassReactiveLevel(lowHz = 70, highHz = 300): number {
+    this.bassEnvelope = this.getReactiveEnergyProfile(lowHz, highHz).overall;
+    return this.bassEnvelope;
   }
 
   async ensureContext(): Promise<void> {
@@ -402,6 +478,8 @@ export class TapeAudioEngine {
     this.anchorContextTime = this.context.currentTime;
     this.isPlaying = false;
     this.bassEnvelope = 0;
+    this.reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+    this.reactivePulseEnvelope = 0;
     this.stopSource();
     this.stopTicker();
     this.emitState();
@@ -414,6 +492,8 @@ export class TapeAudioEngine {
     this.anchorMediaTime = 0;
     this.isPlaying = false;
     this.bassEnvelope = 0;
+    this.reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+    this.reactivePulseEnvelope = 0;
     this.stopSource();
     this.stopTicker();
     this.emitState();
@@ -670,6 +750,8 @@ export class TapeAudioEngine {
     this.anchorMediaTime = 0;
     this.trackLoading = false;
     this.bassEnvelope = 0;
+    this.reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+    this.reactivePulseEnvelope = 0;
     this.setClipWarning(false);
     this.emitState();
   }
@@ -689,6 +771,8 @@ export class TapeAudioEngine {
     this.bassSpectrumData = null;
     this.bassTimeDomainData = null;
     this.bassEnvelope = 0;
+    this.reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+    this.reactivePulseEnvelope = 0;
     this.quality = createDefaultQualityState();
 
     if (this.context && this.context.state !== "closed") {
@@ -724,6 +808,8 @@ export class TapeAudioEngine {
     this.bassSpectrumData = null;
     this.bassTimeDomainData = null;
     this.bassEnvelope = 0;
+    this.reactiveBandEnvelopes = { low: 0, mid: 0, high: 0 };
+    this.reactivePulseEnvelope = 0;
   }
 
   private setupProcessingGraph(ctx: AudioContext): void {

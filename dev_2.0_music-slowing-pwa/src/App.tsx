@@ -6,7 +6,11 @@ import {
   createDefaultEqBands,
   sanitizeEqBands
 } from "./audioFxPresets";
-import { TapeAudioEngine, type WaveformAnalyserNodes } from "./audioEngine";
+import {
+  TapeAudioEngine,
+  type ReactiveEnergyProfile,
+  type WaveformAnalyserNodes
+} from "./audioEngine";
 import {
   deleteTrackById,
   getAllTracks,
@@ -511,8 +515,16 @@ export default function App() {
   const bgPhaseRef = useRef(0);
   const bgSmoothedRef = useRef(0);
   const bgTargetRef = useRef(0);
-  const bgBassFloorRef = useRef(0.02);
-  const bgBassPeakRef = useRef(0.16);
+  const bgBandFloorRef = useRef<{ low: number; mid: number; high: number }>({
+    low: 0.02,
+    mid: 0.018,
+    high: 0.015
+  });
+  const bgBandPeakRef = useRef<{ low: number; mid: number; high: number }>({
+    low: 0.16,
+    mid: 0.14,
+    high: 0.12
+  });
   const bgPulseRef = useRef(0);
   const bgLastRawBassRef = useRef(0);
   const playbackLifecycleRef = useRef({ isPlaying: false, isReady: false });
@@ -1081,15 +1093,19 @@ export default function App() {
     if (!backgroundMotionEnabled) {
       bgSmoothedRef.current = 0;
       bgTargetRef.current = 0;
-      bgBassFloorRef.current = 0.02;
-      bgBassPeakRef.current = 0.16;
+      bgBandFloorRef.current = { low: 0.02, mid: 0.018, high: 0.015 };
+      bgBandPeakRef.current = { low: 0.16, mid: 0.14, high: 0.12 };
       bgPulseRef.current = 0;
       bgLastRawBassRef.current = 0;
       root.style.setProperty("--bg-energy", "0");
       root.style.setProperty("--bg-pulse", "0");
+      root.style.setProperty("--bg-band-low", "0");
+      root.style.setProperty("--bg-band-mid", "0");
+      root.style.setProperty("--bg-band-high", "0");
       root.style.setProperty("--bg-flow-shift-x", "0%");
       root.style.setProperty("--bg-flow-shift-y", "0%");
       root.style.setProperty("--bg-flow-angle-offset", "0deg");
+      root.style.setProperty("--bg-flow-distort", "0");
       root.style.setProperty("--bg-reaction", "0");
       return;
     }
@@ -1130,30 +1146,58 @@ export default function App() {
       ) {
         lastBassSampleTimestamp = now;
         if (backgroundBassReactiveEnabled) {
-          const rawBass = engineRef.current?.getBassReactiveLevel(bgBassLow, bgBassHigh) ?? 0;
-          const floor = (bgBassFloorRef.current = bgBassFloorRef.current * 0.989 + rawBass * 0.011);
-          const peak = (bgBassPeakRef.current = Math.max(rawBass, bgBassPeakRef.current * 0.974));
-          const span = Math.max(bgBassThreshold * 0.7, peak - floor);
-          const normalized = clamp((rawBass - floor) / span, 0, 1);
-          const rawDelta = Math.max(0, rawBass - bgLastRawBassRef.current);
-          const transient = clamp(rawDelta * (8 + reactionStrength * 1.8), 0, 1);
-          const punch = clamp(Math.pow(normalized, 0.56) * 0.72 + transient * 0.58, 0, 1);
+          const profile: ReactiveEnergyProfile = engineRef.current?.getReactiveEnergyProfile(
+            bgBassLow,
+            bgBassHigh
+          ) ?? {
+            low: 0,
+            mid: 0,
+            high: 0,
+            pulse: 0,
+            overall: 0
+          };
+
+          const normalizeBand = (band: "low" | "mid" | "high", raw: number) => {
+            const floor = bgBandFloorRef.current[band] =
+              bgBandFloorRef.current[band] * 0.989 + raw * 0.011;
+            const peak = bgBandPeakRef.current[band] =
+              Math.max(raw, bgBandPeakRef.current[band] * 0.976);
+            const span = Math.max(bgBassThreshold * 0.7, peak - floor);
+            return clamp((raw - floor) / span, 0, 1);
+          };
+
+          const lowBand = normalizeBand("low", profile.low);
+          const midBand = normalizeBand("mid", profile.mid);
+          const highBand = normalizeBand("high", profile.high);
+          const transient = clamp(
+            profile.pulse + Math.max(0, profile.low - bgLastRawBassRef.current) * 1.5,
+            0,
+            1
+          );
 
           targetEnergy = clamp(
-            rawBass * (0.5 + reactionStrength * 0.28) +
-            punch * (0.42 + reactionStrength * 1.36),
+            lowBand * (0.68 + reactionStrength * 0.74) +
+            midBand * (0.38 + reactionStrength * 0.42) +
+            highBand * (0.22 + reactionStrength * 0.24) +
+            transient * (0.36 + reactionStrength * 0.64),
             0,
-            2.25
+            2.3
           );
           bgPulseRef.current = Math.max(
-            bgPulseRef.current * 0.80,
-            punch * (0.62 + reactionStrength * 0.96)
+            bgPulseRef.current * 0.78,
+            transient * (0.58 + reactionStrength * 0.82)
           );
-          bgLastRawBassRef.current = rawBass;
+          bgLastRawBassRef.current = profile.low;
+          root.style.setProperty("--bg-band-low", lowBand.toFixed(4));
+          root.style.setProperty("--bg-band-mid", midBand.toFixed(4));
+          root.style.setProperty("--bg-band-high", highBand.toFixed(4));
         } else {
           targetEnergy = 0;
           bgPulseRef.current *= 0.92;
           bgLastRawBassRef.current = 0;
+          root.style.setProperty("--bg-band-low", "0");
+          root.style.setProperty("--bg-band-mid", "0");
+          root.style.setProperty("--bg-band-high", "0");
         }
       }
 
@@ -1179,6 +1223,7 @@ export default function App() {
       const shiftY = Math.cos(phase * 0.83) * (1.5 + visualEnergy * (6.5 + reactionStrength * 1.8));
       const angleOffset = Math.sin(phase * 0.57) * (2.8 + visualEnergy * (7.0 + reactionStrength * 2.0));
       const pulse = clamp(bgPulseRef.current, 0, 1);
+      const flowDistort = clamp((visualEnergy * 0.48 + pulse * 0.72) / 1.6, 0, 1.35);
 
       root.style.setProperty("--bg-energy", visualEnergy.toFixed(4));
       root.style.setProperty("--bg-pulse", pulse.toFixed(4));
@@ -1186,6 +1231,7 @@ export default function App() {
       root.style.setProperty("--bg-flow-shift-x", `${shiftX.toFixed(3)}%`);
       root.style.setProperty("--bg-flow-shift-y", `${shiftY.toFixed(3)}%`);
       root.style.setProperty("--bg-flow-angle-offset", `${angleOffset.toFixed(3)}deg`);
+      root.style.setProperty("--bg-flow-distort", flowDistort.toFixed(4));
 
       rafId = window.requestAnimationFrame(tick);
     };
@@ -1300,6 +1346,9 @@ export default function App() {
       "--theme-tint": appearanceTheme.tint,
       "--bg-energy": 0,
       "--bg-pulse": 0,
+      "--bg-band-low": 0,
+      "--bg-band-mid": 0,
+      "--bg-band-high": 0,
       "--bg-orb-x": "52%",
       "--bg-orb-y": "24%",
       "--bg-orb2-x": "68%",
@@ -1308,6 +1357,7 @@ export default function App() {
       "--bg-flow-shift-x": "0%",
       "--bg-flow-shift-y": "0%",
       "--bg-flow-angle-offset": "0deg",
+      "--bg-flow-distort": 0,
       "--bg-reaction": "1",
       "--bg-morph": 0.2
     }) as CSSProperties,
@@ -1665,10 +1715,10 @@ export default function App() {
     <div className="app-root" ref={appRootRef} style={appStyle}>
       {backgroundMotionEnabled && (
         <div className="aurora-bg" aria-hidden="true">
-          <div className="aurora-orb aurora-orb-1" />
-          <div className="aurora-orb aurora-orb-2" />
-          <div className="aurora-orb aurora-orb-3" />
-          <div className="aurora-orb aurora-orb-4" />
+          <div className="flow-ribbon flow-ribbon-back" />
+          <div className="flow-ribbon flow-ribbon-mid" />
+          <div className="flow-ribbon flow-ribbon-front" />
+          <div className="flow-speckle" />
         </div>
       )}
       <header className="app-header">
