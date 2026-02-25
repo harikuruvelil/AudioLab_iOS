@@ -178,6 +178,11 @@ interface PersistedAudioSettings {
   appearanceThemeId: AppearanceThemeId;
   waveformEnabled: boolean;
   waveformMode: WaveformMode;
+  waveformTargetFps: number;
+  waveformColor: string;
+  backgroundMotionEnabled: boolean;
+  backgroundBassReactiveEnabled: boolean;
+  backgroundBassReaction: number;
 }
 
 interface PersistedTransportSettings {
@@ -187,6 +192,11 @@ interface PersistedTransportSettings {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function sanitizeWaveformColor(raw: unknown): string {
+  if (typeof raw !== "string") return "#65d4ff";
+  return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : "#65d4ff";
 }
 
 function isEqCustomSlotName(value: string): value is EqCustomSlotName {
@@ -331,6 +341,23 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
       waveformModeRaw === "vectorscope"
       ? waveformModeRaw
       : "linear";
+  const waveformTargetFps =
+    typeof value.waveformTargetFps === "number"
+      ? clamp(Math.round(value.waveformTargetFps), 24, 120)
+      : 60;
+  const waveformColor = sanitizeWaveformColor(value.waveformColor);
+  const backgroundMotionEnabled =
+    typeof value.backgroundMotionEnabled === "boolean"
+      ? value.backgroundMotionEnabled
+      : true;
+  const backgroundBassReactiveEnabled =
+    typeof value.backgroundBassReactiveEnabled === "boolean"
+      ? value.backgroundBassReactiveEnabled
+      : true;
+  const backgroundBassReaction =
+    typeof value.backgroundBassReaction === "number"
+      ? clamp(value.backgroundBassReaction, 0, 3)
+      : 1;
 
   return {
     rate,
@@ -344,7 +371,12 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
     eqCurveSelection,
     appearanceThemeId,
     waveformEnabled,
-    waveformMode
+    waveformMode,
+    waveformTargetFps,
+    waveformColor,
+    backgroundMotionEnabled,
+    backgroundBassReactiveEnabled,
+    backgroundBassReaction
   };
 }
 
@@ -416,6 +448,21 @@ export default function App() {
   const [waveformMode, setWaveformMode] = useState<WaveformMode>(
     initialAudioSettings?.waveformMode ?? "linear"
   );
+  const [waveformTargetFps, setWaveformTargetFps] = useState<number>(
+    initialAudioSettings?.waveformTargetFps ?? 60
+  );
+  const [waveformColor, setWaveformColor] = useState<string>(
+    initialAudioSettings?.waveformColor ?? "#65d4ff"
+  );
+  const [backgroundMotionEnabled, setBackgroundMotionEnabled] = useState<boolean>(
+    initialAudioSettings?.backgroundMotionEnabled ?? true
+  );
+  const [backgroundBassReactiveEnabled, setBackgroundBassReactiveEnabled] = useState<boolean>(
+    initialAudioSettings?.backgroundBassReactiveEnabled ?? true
+  );
+  const [backgroundBassReaction, setBackgroundBassReaction] = useState<number>(
+    initialAudioSettings?.backgroundBassReaction ?? 1
+  );
   const [appearanceThemeId, setAppearanceThemeId] = useState<AppearanceThemeId>(
     initialAudioSettings?.appearanceThemeId ?? "arctic"
   );
@@ -427,6 +474,8 @@ export default function App() {
     initialAudioSettings?.eqCustomSlots ?? createDefaultEqCustomSlots()
   );
   const [queueTrackIds, setQueueTrackIds] = useState<string[]>([]);
+  const [darkLockActive, setDarkLockActive] = useState(false);
+  const [darkLockHintVisible, setDarkLockHintVisible] = useState(false);
 
   const engineRef = useRef<TapeAudioEngine | null>(null);
   const onTrackEndedRef = useRef<() => Promise<void> | void>(() => { });
@@ -435,6 +484,8 @@ export default function App() {
   const bgPhaseRef = useRef(0);
   const bgSmoothedRef = useRef(0);
   const bgTargetRef = useRef(0);
+  const bgBassFloorRef = useRef(0.02);
+  const bgBassPeakRef = useRef(0.16);
 
   // Shuffle queue state that persists while app is running.
   const shuffleHistoryRef = useRef<string[]>([]);
@@ -924,7 +975,12 @@ export default function App() {
       eqCurveSelection,
       appearanceThemeId,
       waveformEnabled,
-      waveformMode
+      waveformMode,
+      waveformTargetFps,
+      waveformColor,
+      backgroundMotionEnabled,
+      backgroundBassReactiveEnabled,
+      backgroundBassReaction
     };
 
     try {
@@ -944,7 +1000,12 @@ export default function App() {
     eqCurveSelection,
     appearanceThemeId,
     waveformEnabled,
-    waveformMode
+    waveformMode,
+    waveformTargetFps,
+    waveformColor,
+    backgroundMotionEnabled,
+    backgroundBassReactiveEnabled,
+    backgroundBassReaction
   ]);
 
   useEffect(() => {
@@ -967,6 +1028,22 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const root = appRootRef.current;
+    if (!root) return;
+
+    if (!backgroundMotionEnabled) {
+      bgSmoothedRef.current = 0;
+      bgTargetRef.current = 0;
+      bgBassFloorRef.current = 0.02;
+      bgBassPeakRef.current = 0.16;
+      root.style.setProperty("--bg-energy", "0");
+      root.style.setProperty("--bg-flow-shift-x", "0%");
+      root.style.setProperty("--bg-flow-shift-y", "0%");
+      root.style.setProperty("--bg-flow-angle-offset", "0deg");
+      root.style.setProperty("--bg-reaction", "0");
+      return;
+    }
+
     let rafId = 0;
     let smoothed = bgSmoothedRef.current;
     let targetEnergy = bgTargetRef.current;
@@ -976,6 +1053,7 @@ export default function App() {
     const heavyVisualMode = activeTab === "player" && playback.isPlaying;
     const frameIntervalMs = heavyVisualMode ? 1000 / 30 : 1000 / 18;
     const bassSampleIntervalMs = heavyVisualMode ? 1000 / 24 : 1000 / 14;
+    const reactionStrength = clamp(backgroundBassReaction, 0, 3);
 
     const tick = (now: number) => {
       if (document.hidden) {
@@ -1001,9 +1079,17 @@ export default function App() {
         now - lastBassSampleTimestamp >= bassSampleIntervalMs
       ) {
         lastBassSampleTimestamp = now;
-        const rawBass = engineRef.current?.getBassReactiveLevel(40, 280) ?? 0;
-        // Raise sensitivity in musical bass range while keeping a stable ceiling.
-        targetEnergy = clamp(Math.pow(rawBass, 0.66) * 1.62, 0, 1);
+        if (backgroundBassReactiveEnabled) {
+          const rawBass = engineRef.current?.getBassReactiveLevel(40, 280) ?? 0;
+          const floor = (bgBassFloorRef.current = bgBassFloorRef.current * 0.992 + rawBass * 0.008);
+          const peak = (bgBassPeakRef.current = Math.max(rawBass, bgBassPeakRef.current * 0.985));
+          const normalized = clamp((rawBass - floor) / Math.max(0.02, peak - floor), 0, 1);
+          const punch = Math.pow(normalized, 0.32);
+          // Strong response across 200-300% while keeping lower settings controllable.
+          targetEnergy = clamp(punch * (0.6 + reactionStrength * 2.8), 0, 1.8);
+        } else {
+          targetEnergy = 0;
+        }
       }
 
       const smoothAlpha = clamp(0.11 * deltaNorm, 0.04, 0.24);
@@ -1013,25 +1099,51 @@ export default function App() {
       bgTargetRef.current = targetEnergy;
       bgPhaseRef.current = phase;
 
-      const root = appRootRef.current;
-      if (root) {
-        const visualEnergy = clamp(heavyVisualMode ? smoothed * 0.88 : smoothed * 0.62, 0, 1);
-        const shiftX = Math.sin(phase) * (1.9 + visualEnergy * 4.6);
-        const shiftY = Math.cos(phase * 0.83) * (1.2 + visualEnergy * 3.8);
-        const angleOffset = Math.sin(phase * 0.57) * (2.4 + visualEnergy * 4.8);
+      const baseMotion = heavyVisualMode ? 0.16 : 0.11;
+      const visualEnergy = clamp(
+        baseMotion +
+          (backgroundBassReactiveEnabled
+            ? heavyVisualMode
+              ? smoothed * (0.85 + reactionStrength * 0.32)
+              : smoothed * (0.58 + reactionStrength * 0.22)
+            : 0),
+        0,
+        2
+      );
+      const shiftX = Math.sin(phase) * (1.6 + visualEnergy * (6.4 + reactionStrength * 1.7));
+      const shiftY = Math.cos(phase * 0.83) * (1.2 + visualEnergy * (5.5 + reactionStrength * 1.4));
+      const angleOffset = Math.sin(phase * 0.57) * (2.4 + visualEnergy * (6.2 + reactionStrength * 1.5));
 
-        root.style.setProperty("--bg-energy", visualEnergy.toFixed(4));
-        root.style.setProperty("--bg-flow-shift-x", `${shiftX.toFixed(3)}%`);
-        root.style.setProperty("--bg-flow-shift-y", `${shiftY.toFixed(3)}%`);
-        root.style.setProperty("--bg-flow-angle-offset", `${angleOffset.toFixed(3)}deg`);
-      }
+      root.style.setProperty("--bg-energy", visualEnergy.toFixed(4));
+      root.style.setProperty("--bg-reaction", reactionStrength.toFixed(4));
+      root.style.setProperty("--bg-flow-shift-x", `${shiftX.toFixed(3)}%`);
+      root.style.setProperty("--bg-flow-shift-y", `${shiftY.toFixed(3)}%`);
+      root.style.setProperty("--bg-flow-angle-offset", `${angleOffset.toFixed(3)}deg`);
 
       rafId = window.requestAnimationFrame(tick);
     };
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [activeTab, playback.isPlaying]);
+  }, [
+    activeTab,
+    backgroundBassReaction,
+    backgroundBassReactiveEnabled,
+    backgroundMotionEnabled,
+    playback.isPlaying
+  ]);
+
+  useEffect(() => {
+    if (!darkLockActive) {
+      setDarkLockHintVisible(false);
+      return;
+    }
+    setDarkLockHintVisible(true);
+    const timeoutId = window.setTimeout(() => {
+      setDarkLockHintVisible(false);
+    }, 2400);
+    return () => window.clearTimeout(timeoutId);
+  }, [darkLockActive]);
 
   const appearanceTheme = APPEARANCE_THEMES[appearanceThemeId];
   const appStyle = useMemo(
@@ -1051,6 +1163,7 @@ export default function App() {
         "--bg-flow-shift-x": "0%",
         "--bg-flow-shift-y": "0%",
         "--bg-flow-angle-offset": "0deg",
+        "--bg-reaction": "1",
         "--bg-morph": 0.2
       }) as CSSProperties,
     [appearanceTheme]
@@ -1205,6 +1318,30 @@ export default function App() {
 
   const handleWaveformModeChange = useCallback((mode: WaveformMode) => {
     setWaveformMode(mode);
+  }, []);
+
+  const handleWaveformTargetFpsChange = useCallback((nextFps: number) => {
+    setWaveformTargetFps(clamp(Math.round(nextFps), 24, 120));
+  }, []);
+
+  const handleWaveformColorChange = useCallback((nextColor: string) => {
+    setWaveformColor(sanitizeWaveformColor(nextColor));
+  }, []);
+
+  const handleBackgroundMotionEnabledChange = useCallback((enabled: boolean) => {
+    setBackgroundMotionEnabled(enabled);
+  }, []);
+
+  const handleBackgroundBassReactiveEnabledChange = useCallback((enabled: boolean) => {
+    setBackgroundBassReactiveEnabled(enabled);
+  }, []);
+
+  const handleBackgroundBassReactionChange = useCallback((next: number) => {
+    setBackgroundBassReaction(clamp(next, 0, 3));
+  }, []);
+
+  const handleDarkLockActiveChange = useCallback((active: boolean) => {
+    setDarkLockActive(active);
   }, []);
 
   const handleAppearanceThemeChange = useCallback((themeId: string) => {
@@ -1424,6 +1561,18 @@ export default function App() {
             waveformMode={waveformMode}
             onWaveformEnabledChange={handleWaveformEnabledChange}
             onWaveformModeChange={handleWaveformModeChange}
+            waveformTargetFps={waveformTargetFps}
+            onWaveformTargetFpsChange={handleWaveformTargetFpsChange}
+            waveformColor={waveformColor}
+            onWaveformColorChange={handleWaveformColorChange}
+            backgroundMotionEnabled={backgroundMotionEnabled}
+            onBackgroundMotionEnabledChange={handleBackgroundMotionEnabledChange}
+            backgroundBassReactiveEnabled={backgroundBassReactiveEnabled}
+            onBackgroundBassReactiveEnabledChange={handleBackgroundBassReactiveEnabledChange}
+            backgroundBassReaction={backgroundBassReaction}
+            onBackgroundBassReactionChange={handleBackgroundBassReactionChange}
+            darkLockActive={darkLockActive}
+            onDarkLockActiveChange={handleDarkLockActiveChange}
             getWaveformAnalysers={getWaveformAnalysers}
             onToggleShuffle={handleToggleShuffle}
             onCycleRepeatMode={handleCycleRepeatMode}
@@ -1450,6 +1599,24 @@ export default function App() {
           Library
         </button>
       </nav>
+
+      {darkLockActive ? (
+        <div className="dark-lock-overlay" role="dialog" aria-label="Dark lock screen">
+          {darkLockHintVisible ? (
+            <p className="dark-lock-hint">
+              touch input not active while in this mode, press X to exit
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="dark-lock-exit"
+            onClick={() => setDarkLockActive(false)}
+            aria-label="Exit dark lock screen"
+          >
+            X
+          </button>
+        </div>
+      ) : null}
 
       <Toast message={toastMessage} />
     </div>

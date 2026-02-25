@@ -30,6 +30,8 @@ interface PlayerScreenProps {
   queueTracks: TrackMeta[];
   waveformEnabled: boolean;
   waveformMode: WaveformMode;
+  waveformTargetFps: number;
+  waveformColor: string;
   onTogglePlay: () => Promise<void> | void;
   onPrev: () => Promise<void> | void;
   onNext: () => Promise<void> | void;
@@ -59,6 +61,16 @@ interface PlayerScreenProps {
   onAppearanceThemeChange: (themeId: string) => void;
   onWaveformEnabledChange: (enabled: boolean) => void;
   onWaveformModeChange: (mode: WaveformMode) => void;
+  onWaveformTargetFpsChange: (fps: number) => void;
+  onWaveformColorChange: (color: string) => void;
+  backgroundMotionEnabled: boolean;
+  onBackgroundMotionEnabledChange: (enabled: boolean) => void;
+  backgroundBassReactiveEnabled: boolean;
+  onBackgroundBassReactiveEnabledChange: (enabled: boolean) => void;
+  backgroundBassReaction: number;
+  onBackgroundBassReactionChange: (amount: number) => void;
+  darkLockActive: boolean;
+  onDarkLockActiveChange: (active: boolean) => void;
   getWaveformAnalysers: () => {
     mono: AnalyserNode | null;
     left: AnalyserNode | null;
@@ -72,6 +84,19 @@ interface PlayerScreenProps {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeHexColor(raw: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : "#65d4ff";
+}
+
+function hexToRgb(color: string): { r: number; g: number; b: number } {
+  const safe = normalizeHexColor(color);
+  return {
+    r: parseInt(safe.slice(1, 3), 16),
+    g: parseInt(safe.slice(3, 5), 16),
+    b: parseInt(safe.slice(5, 7), 16)
+  };
 }
 
 function formatHz(value: number | null): string {
@@ -138,6 +163,8 @@ export function PlayerScreen({
   queueTracks,
   waveformEnabled,
   waveformMode,
+  waveformTargetFps,
+  waveformColor,
   onTogglePlay,
   onPrev,
   onNext,
@@ -162,6 +189,16 @@ export function PlayerScreen({
   onAppearanceThemeChange,
   onWaveformEnabledChange,
   onWaveformModeChange,
+  onWaveformTargetFpsChange,
+  onWaveformColorChange,
+  backgroundMotionEnabled,
+  onBackgroundMotionEnabledChange,
+  backgroundBassReactiveEnabled,
+  onBackgroundBassReactiveEnabledChange,
+  backgroundBassReaction,
+  onBackgroundBassReactionChange,
+  darkLockActive,
+  onDarkLockActiveChange,
   getWaveformAnalysers,
   onToggleShuffle,
   onCycleRepeatMode,
@@ -334,6 +371,11 @@ export function PlayerScreen({
     context2d.imageSmoothingEnabled = false;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rgb = hexToRgb(waveformColor);
+    const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.95)`;
+    const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.9)`;
+    const lineColorSoft = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.34)`;
+    const lineColorGlow = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.24)`;
     let frameWidth = 1;
     let frameHeight = 1;
 
@@ -359,7 +401,7 @@ export function PlayerScreen({
       context2d.beginPath();
       context2d.moveTo(0, y);
       context2d.lineTo(width, y);
-      context2d.strokeStyle = "rgba(101, 212, 255, 0.34)";
+      context2d.strokeStyle = lineColorSoft;
       context2d.lineWidth = Math.max(1.1, dpr);
       context2d.stroke();
     };
@@ -388,7 +430,7 @@ export function PlayerScreen({
         }
       }
       context2d.lineWidth = Math.max(1.35, dpr);
-      context2d.strokeStyle = "rgba(101, 212, 255, 0.95)";
+      context2d.strokeStyle = lineColorStrong;
       context2d.stroke();
     };
 
@@ -424,7 +466,7 @@ export function PlayerScreen({
       }
       context2d.closePath();
       context2d.lineWidth = Math.max(1.2, dpr);
-      context2d.strokeStyle = "rgba(101, 212, 255, 0.9)";
+      context2d.strokeStyle = lineColorMedium;
       context2d.stroke();
     };
 
@@ -523,10 +565,10 @@ export function PlayerScreen({
       context2d.lineJoin = "round";
       context2d.lineCap = "round";
       context2d.lineWidth = Math.max(2.1, dpr * 1.4);
-      context2d.strokeStyle = "rgba(101, 212, 255, 0.24)";
+      context2d.strokeStyle = lineColorGlow;
       context2d.stroke();
       context2d.lineWidth = Math.max(1.05, dpr);
-      context2d.strokeStyle = "rgba(117, 227, 255, 0.92)";
+      context2d.strokeStyle = lineColorStrong;
       context2d.stroke();
     };
 
@@ -535,7 +577,8 @@ export function PlayerScreen({
     let analyserRefreshCounter = 0;
     let lastRenderedAt = 0;
     const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
-    const targetFps = uiOverlayOpen ? 42 : waveformMode === "vectorscope" ? 56 : 60;
+    const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
+    const targetFps = uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps;
     const minFrameMs = 1000 / targetFps;
 
     const drawFrame = (timestamp: number) => {
@@ -559,7 +602,7 @@ export function PlayerScreen({
 
         analyserRefreshCounter += 1;
         if (
-          analyserRefreshCounter >= 60 ||
+          analyserRefreshCounter >= Math.max(30, Math.floor(targetFps)) ||
           (!cachedAnalysers.mono && !cachedAnalysers.left && !cachedAnalysers.right)
         ) {
           cachedAnalysers = getWaveformAnalysers();
@@ -602,8 +645,10 @@ export function PlayerScreen({
     isQueueOpen,
     isSettingsOpen,
     playback.isPlaying,
+    waveformColor,
     waveformEnabled,
-    waveformMode
+    waveformMode,
+    waveformTargetFps
   ]);
 
   useEffect(() => {
@@ -770,7 +815,7 @@ export function PlayerScreen({
           <button
             type="button"
             className="icon-button settings-trigger"
-            aria-label="Customize appearance"
+            aria-label="Customize settings"
             onClick={() => {
               setIsSettingsOpen(false);
               setIsQueueOpen(false);
@@ -1042,39 +1087,154 @@ export function PlayerScreen({
             className="settings-sheet appearance-sheet"
             role="dialog"
             aria-modal="true"
-            aria-label="Customize appearance"
+            aria-label="Customize settings"
             onClick={(event) => event.stopPropagation()}
           >
             <header className="settings-sheet-header">
-              <h3>Customize Appearance</h3>
+              <h3>Customize Settings</h3>
               <button
                 type="button"
                 className="icon-button settings-close"
                 onClick={() => setIsAppearanceOpen(false)}
-                aria-label="Close appearance settings"
+                aria-label="Close customize settings"
               >
                 {ICON_CLOSE}
               </button>
             </header>
 
-            <div className="appearance-grid">
-              {appearanceThemes.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  className={`appearance-option ${appearanceThemeId === theme.id ? "is-selected" : ""}`}
-                  onClick={() => onAppearanceThemeChange(theme.id)}
-                >
-                  <span
-                    className="appearance-swatch"
-                    style={{
-                      background: `linear-gradient(120deg, ${theme.accent} 0%, ${theme.accent2} 100%)`
-                    }}
-                    aria-hidden="true"
+            <div className="fx-card">
+              <label className="field-label">Dark Lock Screen</label>
+              <button
+                type="button"
+                className="transport-button dark-lock-button"
+                onClick={() => {
+                  onDarkLockActiveChange(true);
+                  setIsAppearanceOpen(false);
+                  setIsSettingsOpen(false);
+                  setIsQueueOpen(false);
+                }}
+              >
+                {darkLockActive ? "Dark Lock Active" : "Activate Dark Lock Screen"}
+              </button>
+            </div>
+
+            <div className="fx-card">
+              <div className="toggle-row settings-inline-toggle">
+                <span>Waveform</span>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={waveformEnabled}
+                    onChange={(event) => onWaveformEnabledChange(event.currentTarget.checked)}
                   />
-                  <span className="appearance-option-title">{theme.label}</span>
-                </button>
-              ))}
+                  <span>{waveformEnabled ? "On" : "Off"}</span>
+                </label>
+              </div>
+              <label className="field-label" htmlFor="waveform-mode-select">
+                Mode
+              </label>
+              <select
+                id="waveform-mode-select"
+                className="fx-select"
+                value={waveformMode}
+                onChange={(event) => onWaveformModeChange(event.currentTarget.value as WaveformMode)}
+              >
+                <option value="linear">Linear</option>
+                <option value="circular">Circular</option>
+                <option value="vectorscope">Vectorscope</option>
+              </select>
+
+              <label className="field-label">
+                Oscilloscope Frame Rate: {clamp(Math.round(waveformTargetFps), 24, 120)} Hz
+              </label>
+              <input
+                className="speed-slider"
+                type="range"
+                min={24}
+                max={120}
+                step={1}
+                value={clamp(Math.round(waveformTargetFps), 24, 120)}
+                onChange={(event) => onWaveformTargetFpsChange(Number(event.currentTarget.value))}
+              />
+
+              <label className="field-label" htmlFor="waveform-color-input">
+                Waveform Color
+              </label>
+              <input
+                id="waveform-color-input"
+                className="waveform-color-input"
+                type="color"
+                value={normalizeHexColor(waveformColor)}
+                onChange={(event) => onWaveformColorChange(event.currentTarget.value)}
+              />
+            </div>
+
+            <div className="fx-card">
+              <div className="toggle-row">
+                <span>Background Motion</span>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={backgroundMotionEnabled}
+                    onChange={(event) => onBackgroundMotionEnabledChange(event.currentTarget.checked)}
+                  />
+                  <span>{backgroundMotionEnabled ? "On" : "Off"}</span>
+                </label>
+              </div>
+
+              <div className="toggle-row">
+                <span>Bass-Reactive Motion</span>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={backgroundBassReactiveEnabled}
+                    disabled={!backgroundMotionEnabled}
+                    onChange={(event) =>
+                      onBackgroundBassReactiveEnabledChange(event.currentTarget.checked)
+                    }
+                  />
+                  <span>{backgroundBassReactiveEnabled ? "On" : "Off"}</span>
+                </label>
+              </div>
+
+              <label className="field-label">
+                Bass Reaction Strength: {Math.round(clamp(backgroundBassReaction, 0, 3) * 100)}%
+              </label>
+              <input
+                className="speed-slider"
+                type="range"
+                min={0}
+                max={300}
+                step={1}
+                value={Math.round(clamp(backgroundBassReaction, 0, 3) * 100)}
+                disabled={!backgroundMotionEnabled || !backgroundBassReactiveEnabled}
+                onChange={(event) =>
+                  onBackgroundBassReactionChange(Number(event.currentTarget.value) / 100)
+                }
+              />
+            </div>
+
+            <div className="fx-card">
+              <label className="field-label">Theme</label>
+              <div className="appearance-grid">
+                {appearanceThemes.map((theme) => (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    className={`appearance-option ${appearanceThemeId === theme.id ? "is-selected" : ""}`}
+                    onClick={() => onAppearanceThemeChange(theme.id)}
+                  >
+                    <span
+                      className="appearance-swatch"
+                      style={{
+                        background: `linear-gradient(120deg, ${theme.accent} 0%, ${theme.accent2} 100%)`
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span className="appearance-option-title">{theme.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
         </div>
@@ -1104,33 +1264,6 @@ export function PlayerScreen({
                 {ICON_CLOSE}
               </button>
             </header>
-
-            <div className="fx-card">
-              <div className="toggle-row settings-inline-toggle">
-                <span>Waveform</span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={waveformEnabled}
-                    onChange={(event) => onWaveformEnabledChange(event.currentTarget.checked)}
-                  />
-                  <span>{waveformEnabled ? "On" : "Off"}</span>
-                </label>
-              </div>
-              <label className="field-label" htmlFor="waveform-mode-select">
-                Mode
-              </label>
-              <select
-                id="waveform-mode-select"
-                className="fx-select"
-                value={waveformMode}
-                onChange={(event) => onWaveformModeChange(event.currentTarget.value as WaveformMode)}
-              >
-                <option value="linear">Linear</option>
-                <option value="circular">Circular</option>
-                <option value="vectorscope">Vectorscope</option>
-              </select>
-            </div>
 
             <div className="fx-card">
               <div className="toggle-row">
