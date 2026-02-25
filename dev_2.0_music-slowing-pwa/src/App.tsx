@@ -8,7 +8,6 @@ import {
 } from "./audioFxPresets";
 import {
   TapeAudioEngine,
-  type ReactiveEnergyProfile,
   type WaveformAnalyserNodes
 } from "./audioEngine";
 import {
@@ -512,23 +511,6 @@ export default function App() {
   const engineRef = useRef<TapeAudioEngine | null>(null);
   const onTrackEndedRef = useRef<() => Promise<void> | void>(() => { });
   const queueRef = useRef<string[]>([]);
-  const appRootRef = useRef<HTMLDivElement | null>(null);
-
-  const bgPhaseRef = useRef(0);
-  const bgSmoothedRef = useRef(0);
-  const bgTargetRef = useRef(0);
-  const bgBandFloorRef = useRef<{ low: number; mid: number; high: number }>({
-    low: 0.02,
-    mid: 0.018,
-    high: 0.015
-  });
-  const bgBandPeakRef = useRef<{ low: number; mid: number; high: number }>({
-    low: 0.16,
-    mid: 0.14,
-    high: 0.12
-  });
-  const bgPulseRef = useRef(0);
-  const bgLastRawBassRef = useRef(0);
   const playbackLifecycleRef = useRef({ isPlaying: false, isReady: false });
   const resumeOnForegroundRef = useRef(false);
   const lifecycleRecoveryInFlightRef = useRef(false);
@@ -1088,64 +1070,6 @@ export default function App() {
     };
   }, [playback.isPlaying, playback.isReady]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const root = appRootRef.current;
-    if (!root) return;
-
-    if (!backgroundMotionEnabled) {
-      // Find and reset the aurora-bg transform
-      const auroraEl = root.querySelector(".aurora-bg") as HTMLElement | null;
-      if (auroraEl) auroraEl.style.transform = "";
-      return;
-    }
-
-    // Detect coarse pointer (phones/tablets) — cap update rate more aggressively
-    const coarsePointer = typeof window.matchMedia === "function"
-      && window.matchMedia("(pointer: coarse)").matches;
-
-    // On mobile: update at max 8fps (125ms). On desktop: 20fps (50ms).
-    // We only update a single CSS transform on a single element — no CSS var propagation.
-    const frameIntervalMs = coarsePointer ? 125 : 50;
-
-    let rafId = 0;
-    let phase = bgPhaseRef.current;
-    let lastFrameTimestamp = 0;
-
-    const auroraEl = root.querySelector(".aurora-bg") as HTMLElement | null;
-    if (!auroraEl) return;
-
-    const tick = (now: number) => {
-      if (document.hidden) {
-        rafId = window.requestAnimationFrame(tick);
-        return;
-      }
-
-      if (lastFrameTimestamp <= 0) lastFrameTimestamp = now;
-      const elapsed = now - lastFrameTimestamp;
-      if (elapsed < frameIntervalMs) {
-        rafId = window.requestAnimationFrame(tick);
-        return;
-      }
-      lastFrameTimestamp = now;
-
-      const deltaMs = Math.min(120, Math.max(0, elapsed));
-      phase += deltaMs * 0.00045;
-      bgPhaseRef.current = phase;
-
-      // Subtle breathing shift: ±3% x/y. This is the ONLY property updated per frame.
-      // It's applied directly to the element (not :root) so only this element repaints.
-      const shiftX = Math.sin(phase) * 3.0;
-      const shiftY = Math.cos(phase * 0.83) * 2.5;
-      auroraEl.style.transform = `translate(${shiftX.toFixed(2)}%, ${shiftY.toFixed(2)}%)`;
-
-      rafId = window.requestAnimationFrame(tick);
-    };
-
-    rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
-  }, [backgroundMotionEnabled]);
-
   // PWA resume lifecycle: iOS can suspend/close audio when app backgrounds.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1241,23 +1165,7 @@ export default function App() {
       "--accent-2": appearanceTheme.accent2,
       "--bg": appearanceTheme.bg,
       "--bg-deep": appearanceTheme.bgDeep,
-      "--theme-tint": appearanceTheme.tint,
-      "--bg-energy": 0,
-      "--bg-pulse": 0,
-      "--bg-band-low": 0,
-      "--bg-band-mid": 0,
-      "--bg-band-high": 0,
-      "--bg-orb-x": "52%",
-      "--bg-orb-y": "24%",
-      "--bg-orb2-x": "68%",
-      "--bg-orb2-y": "70%",
-      "--bg-flow-angle": "152deg",
-      "--bg-flow-shift-x": "0%",
-      "--bg-flow-shift-y": "0%",
-      "--bg-flow-angle-offset": "0deg",
-      "--bg-flow-distort": 0,
-      "--bg-reaction": "1",
-      "--bg-morph": 0.2
+      "--theme-tint": appearanceTheme.tint
     }) as CSSProperties,
     [appearanceTheme]
   );
@@ -1419,30 +1327,6 @@ export default function App() {
 
   const handleWaveformColorChange = useCallback((nextColor: string) => {
     setWaveformColor(sanitizeWaveformColor(nextColor));
-  }, []);
-
-  const handleBackgroundMotionEnabledChange = useCallback((enabled: boolean) => {
-    setBackgroundMotionEnabled(enabled);
-  }, []);
-
-  const handleBackgroundBassReactiveEnabledChange = useCallback((enabled: boolean) => {
-    setBackgroundBassReactiveEnabled(enabled);
-  }, []);
-
-  const handleBackgroundBassReactionChange = useCallback((next: number) => {
-    setBackgroundBassReaction(clamp(next, 0, 3));
-  }, []);
-
-  const handleBgBassLowChange = useCallback((v: number) => {
-    setBgBassLow(clamp(Math.round(v), 20, 400));
-  }, []);
-
-  const handleBgBassHighChange = useCallback((v: number) => {
-    setBgBassHigh(clamp(Math.round(v), 60, 800));
-  }, []);
-
-  const handleBgBassThresholdChange = useCallback((v: number) => {
-    setBgBassThreshold(clamp(v, 0.005, 0.2));
   }, []);
 
   const handleDarkLockActiveChange = useCallback((active: boolean) => {
@@ -1610,15 +1494,7 @@ export default function App() {
   );
 
   return (
-    <div className="app-root" ref={appRootRef} style={appStyle}>
-      {backgroundMotionEnabled && (
-        <div className="aurora-bg" aria-hidden="true">
-          <div className="aurora-orb aurora-orb-1" />
-          <div className="aurora-orb aurora-orb-2" />
-          <div className="aurora-orb aurora-orb-3" />
-          <div className="aurora-orb aurora-orb-4" />
-        </div>
-      )}
+    <div className="app-root" style={appStyle}>
       <header className="app-header">
         <p className="app-kicker">Audio Lab</p>
         <h1>Slowed HQ</h1>
@@ -1678,18 +1554,6 @@ export default function App() {
             onWaveformTargetFpsChange={handleWaveformTargetFpsChange}
             waveformColor={waveformColor}
             onWaveformColorChange={handleWaveformColorChange}
-            backgroundMotionEnabled={backgroundMotionEnabled}
-            onBackgroundMotionEnabledChange={handleBackgroundMotionEnabledChange}
-            backgroundBassReactiveEnabled={backgroundBassReactiveEnabled}
-            onBackgroundBassReactiveEnabledChange={handleBackgroundBassReactiveEnabledChange}
-            backgroundBassReaction={backgroundBassReaction}
-            onBackgroundBassReactionChange={handleBackgroundBassReactionChange}
-            bgBassLow={bgBassLow}
-            onBgBassLowChange={handleBgBassLowChange}
-            bgBassHigh={bgBassHigh}
-            onBgBassHighChange={handleBgBassHighChange}
-            bgBassThreshold={bgBassThreshold}
-            onBgBassThresholdChange={handleBgBassThresholdChange}
             darkLockActive={darkLockActive}
             onDarkLockActiveChange={handleDarkLockActiveChange}
             getWaveformAnalysers={getWaveformAnalysers}

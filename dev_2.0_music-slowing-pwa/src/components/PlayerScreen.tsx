@@ -63,18 +63,6 @@ interface PlayerScreenProps {
   onWaveformModeChange: (mode: WaveformMode) => void;
   onWaveformTargetFpsChange: (fps: number) => void;
   onWaveformColorChange: (color: string) => void;
-  backgroundMotionEnabled: boolean;
-  onBackgroundMotionEnabledChange: (enabled: boolean) => void;
-  backgroundBassReactiveEnabled: boolean;
-  onBackgroundBassReactiveEnabledChange: (enabled: boolean) => void;
-  backgroundBassReaction: number;
-  onBackgroundBassReactionChange: (v: number) => void;
-  bgBassLow: number;
-  onBgBassLowChange: (v: number) => void;
-  bgBassHigh: number;
-  onBgBassHighChange: (v: number) => void;
-  bgBassThreshold: number;
-  onBgBassThresholdChange: (v: number) => void;
   darkLockActive: boolean;
   onDarkLockActiveChange: (active: boolean) => void;
   getWaveformAnalysers: () => {
@@ -199,18 +187,6 @@ export function PlayerScreen({
   onWaveformModeChange,
   onWaveformTargetFpsChange,
   onWaveformColorChange,
-  backgroundMotionEnabled,
-  onBackgroundMotionEnabledChange,
-  backgroundBassReactiveEnabled,
-  onBackgroundBassReactiveEnabledChange,
-  backgroundBassReaction,
-  onBackgroundBassReactionChange,
-  bgBassLow,
-  onBgBassLowChange,
-  bgBassHigh,
-  onBgBassHighChange,
-  bgBassThreshold,
-  onBgBassThresholdChange,
   darkLockActive,
   onDarkLockActiveChange,
   getWaveformAnalysers,
@@ -1176,99 +1152,6 @@ export function PlayerScreen({
                 type="color"
                 value={normalizeHexColor(waveformColor)}
                 onChange={(event) => onWaveformColorChange(event.currentTarget.value)}
-              />
-            </div>
-
-            <div className="fx-card">
-              <div className="toggle-row">
-                <span>Background Motion</span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={backgroundMotionEnabled}
-                    onChange={(event) => onBackgroundMotionEnabledChange(event.currentTarget.checked)}
-                  />
-                  <span>{backgroundMotionEnabled ? "On" : "Off"}</span>
-                </label>
-              </div>
-
-              <div className="toggle-row">
-                <span>Bass-Reactive Motion</span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={backgroundBassReactiveEnabled}
-                    disabled={!backgroundMotionEnabled}
-                    onChange={(event) =>
-                      onBackgroundBassReactiveEnabledChange(event.currentTarget.checked)
-                    }
-                  />
-                  <span>{backgroundBassReactiveEnabled ? "On" : "Off"}</span>
-                </label>
-              </div>
-
-              <label className="field-label">
-                Bass Reaction Strength: {Math.round(clamp(backgroundBassReaction, 0, 3) * 100)}%
-              </label>
-              <input
-                className="speed-slider"
-                type="range"
-                min={0}
-                max={300}
-                step={1}
-                value={Math.round(clamp(backgroundBassReaction, 0, 3) * 100)}
-                disabled={!backgroundMotionEnabled || !backgroundBassReactiveEnabled}
-                onChange={(event) =>
-                  onBackgroundBassReactionChange(Number(event.currentTarget.value) / 100)
-                }
-              />
-
-              <label className="field-label">
-                Bass Low Cutoff: {bgBassLow} Hz
-              </label>
-              <input
-                className="speed-slider"
-                type="range"
-                min={20}
-                max={400}
-                step={5}
-                value={bgBassLow}
-                disabled={!backgroundMotionEnabled || !backgroundBassReactiveEnabled}
-                onChange={(event) =>
-                  onBgBassLowChange(Number(event.currentTarget.value))
-                }
-              />
-
-              <label className="field-label">
-                Bass High Cutoff: {bgBassHigh} Hz
-              </label>
-              <input
-                className="speed-slider"
-                type="range"
-                min={60}
-                max={800}
-                step={10}
-                value={bgBassHigh}
-                disabled={!backgroundMotionEnabled || !backgroundBassReactiveEnabled}
-                onChange={(event) =>
-                  onBgBassHighChange(Number(event.currentTarget.value))
-                }
-              />
-
-              <label className="field-label">
-                Bass Threshold: {(bgBassThreshold * 100).toFixed(1)}%
-              </label>
-              <input
-                className="speed-slider"
-                type="range"
-                min={0.5}
-                max={20}
-                step={0.5}
-                value={bgBassThreshold * 100}
-                disabled={!backgroundMotionEnabled || !backgroundBassReactiveEnabled}
-                onChange={(event) =>
-                  onBgBassThresholdChange(Number(event.currentTarget.value) / 100)
-                }
               />
             </div>
 

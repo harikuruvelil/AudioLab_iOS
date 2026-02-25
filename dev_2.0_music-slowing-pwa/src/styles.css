@@ -47,23 +47,6 @@
   --transition-base: 200ms var(--ease-out-expo);
   --transition-smooth: 340ms var(--ease-out-expo);
 
-  /* bg animation */
-  --bg-energy: 0;
-  --bg-pulse: 0;
-  --bg-band-low: 0;
-  --bg-band-mid: 0;
-  --bg-band-high: 0;
-  --bg-orb-x: 52%;
-  --bg-orb-y: 24%;
-  --bg-orb2-x: 68%;
-  --bg-orb2-y: 70%;
-  --bg-flow-angle: 152deg;
-  --bg-flow-shift-x: 0%;
-  --bg-flow-shift-y: 0%;
-  --bg-flow-angle-offset: 0deg;
-  --bg-flow-distort: 0;
-  --bg-reaction: 1;
-  --bg-morph: 0.2;
 }
 
 /* ─── reset ─── */
@@ -78,6 +61,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -126,120 +110,6 @@ button {
       color-mix(in srgb, var(--bg-deep) 82%, #050912 18%) 100%);
 }
 
-
-/* ─── aurora background (pure CSS — no CSS vars inside @keyframes) ───
-   PERF CONTRACT: @keyframes contain ZERO CSS var() references.
-   GPU can pre-compute and cache them. JS only updates .aurora-bg transform.
-   This eliminates the main source of style-recalc jank on iOS Safari PWA.
-*/
-.aurora-bg {
-  position: absolute;
-  inset: -14%;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-  border-radius: inherit;
-  filter: blur(48px);
-  will-change: transform;
-  contain: paint;
-}
-
-.aurora-bg::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(4, 8, 18, 0.40);
-  z-index: 1;
-}
-
-.aurora-orb {
-  position: absolute;
-  border-radius: 50%;
-  mix-blend-mode: screen;
-  will-change: transform;
-}
-
-.aurora-orb-1 {
-  width: 80%;
-  height: 95%;
-  top: -22%;
-  left: -12%;
-  background: radial-gradient(ellipse at center,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 45%, transparent) 48%,
-      transparent 72%);
-  opacity: 0.88;
-  animation: auroraOrb1 9s ease-in-out infinite alternate;
-}
-
-.aurora-orb-2 {
-  width: 85%;
-  height: 88%;
-  top: 10%;
-  right: -18%;
-  background: radial-gradient(ellipse at center,
-      var(--accent-2) 0%,
-      color-mix(in srgb, var(--accent-2) 38%, transparent) 50%,
-      transparent 74%);
-  opacity: 0.82;
-  animation: auroraOrb2 13s ease-in-out infinite alternate;
-}
-
-.aurora-orb-3 {
-  width: 68%;
-  height: 74%;
-  bottom: -18%;
-  left: 12%;
-  background: radial-gradient(ellipse at center,
-      color-mix(in srgb, var(--accent) 60%, var(--accent-2)) 0%,
-      color-mix(in srgb, var(--accent) 28%, transparent) 54%,
-      transparent 76%);
-  opacity: 0.72;
-  animation: auroraOrb3 11s ease-in-out infinite alternate;
-}
-
-.aurora-orb-4 {
-  width: 52%;
-  height: 62%;
-  top: 22%;
-  left: 24%;
-  background: radial-gradient(ellipse at center,
-      color-mix(in srgb, var(--accent-2) 65%, var(--accent)) 0%,
-      color-mix(in srgb, var(--accent-2) 22%, transparent) 52%,
-      transparent 78%);
-  opacity: 0.60;
-  animation: auroraOrb4 17s ease-in-out infinite alternate;
-}
-
-/* STATIC keyframes — zero CSS var() refs, fully GPU pre-computable */
-@keyframes auroraOrb1 {
-  from { transform: translate(0%,   0%)   scale(1.00); }
-  33%  { transform: translate(16%,  -10%) scale(1.07); }
-  67%  { transform: translate(-7%,  18%)  scale(0.95); }
-  to   { transform: translate(28%,  6%)   scale(1.04); }
-}
-
-@keyframes auroraOrb2 {
-  from { transform: translate(0%,   0%)   scale(1.00); }
-  40%  { transform: translate(-20%, 13%)  scale(1.09); }
-  75%  { transform: translate(10%,  -18%) scale(0.91); }
-  to   { transform: translate(-28%, 4%)   scale(1.03); }
-}
-
-@keyframes auroraOrb3 {
-  from { transform: translate(0%,   0%)   scale(1.00); }
-  50%  { transform: translate(18%,  -16%) scale(1.11); }
-  to   { transform: translate(-14%, 10%)  scale(0.93); }
-}
-
-@keyframes auroraOrb4 {
-  from { transform: translate(0%,   0%)   scale(1.00); }
-  30%  { transform: translate(-16%, 12%)  scale(1.05); }
-  70%  { transform: translate(20%,  -9%)  scale(0.97); }
-  to   { transform: translate(9%,   18%)  scale(1.07); }
-}
-
-
 /* ─── header ─── */
 .app-header {
   position: sticky;
@@ -277,16 +147,18 @@ button {
 /* ─── main ─── */
 .app-main {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   padding: 16px;
-  padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  padding-bottom: calc(120px + env(safe-area-inset-bottom));
 }
 
 .screen {
   display: flex;
   flex-direction: column;
+  min-height: 100%;
   gap: 12px;
   animation: screenFadeIn 400ms var(--ease-out-expo) both;
 }
@@ -477,6 +349,7 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -1067,6 +940,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   display: flex;
   align-items: flex-end;
   justify-content: stretch;
+  padding-top: env(safe-area-inset-top);
   /* CRITICAL: do NOT set overflow-y here — iOS eats touch events on the overlay */
   overflow: hidden;
   overscroll-behavior: contain;
@@ -1096,10 +970,8 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   box-shadow: var(--shadow-lg), 0 0 0 0.5px rgba(0, 0, 0, 0.40);
   backdrop-filter: var(--glass-blur-heavy);
   padding: 6px 14px calc(64px + env(safe-area-inset-bottom));
-  max-height: calc(100vh - env(safe-area-inset-top));
-  max-height: calc(100dvh - env(safe-area-inset-top));
-  height: calc(100vh - env(safe-area-inset-top));
-  height: calc(100dvh - env(safe-area-inset-top));
+  max-height: 100%;
+  height: auto;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
@@ -1167,21 +1039,21 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 
 .queue-sheet,
 .appearance-sheet {
-  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
 }
 
 .appearance-sheet {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: auto;
-  max-height: calc(100vh - env(safe-area-inset-top));
-  max-height: calc(100dvh - env(safe-area-inset-top));
+  max-height: 100%;
 }
 
 .queue-sheet {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .queue-clear-button {
@@ -1191,7 +1063,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 .queue-list {
   list-style: none;
   margin: 0;
-  padding: 0 0 calc(56px + env(safe-area-inset-bottom));
+  padding: 0 0 calc(80px + env(safe-area-inset-bottom));
   display: grid;
   gap: 8px;
   overflow: visible;
@@ -1242,11 +1114,11 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 .appearance-grid {
   display: grid;
   gap: 8px;
-  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
 }
 
 .settings-sheet > :last-child {
-  margin-bottom: 8px;
+  margin-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .appearance-option {
@@ -1553,26 +1425,6 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 }
 
 @media (max-width: 768px) {
-  .app-root::before {
-    opacity: calc(0.04 + var(--bg-energy) * 0.03);
-  }
-
-  .app-root::after {
-    opacity: calc(0.03 + var(--bg-energy) * 0.02);
-  }
-
-  .flow-ribbon-back,
-  .flow-speckle {
-    display: none;
-  }
-
-  .flow-ribbon {
-    width: 100%;
-    left: 0;
-    top: 18%;
-    height: 64%;
-  }
-
   .app-header,
   .tabbar,
   .settings-sheet {
