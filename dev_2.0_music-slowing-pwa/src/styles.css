@@ -215,17 +215,157 @@ button {
   }
 }
 
-/* ─── gradient canvas (flowing background) ─── */
-.particle-canvas {
+/* ─── aurora background (GPU CSS orbs – zero CPU) ─── */
+.aurora-bg {
   position: absolute;
   inset: 0;
   z-index: -1;
+  overflow: hidden;
   pointer-events: none;
-  width: 100%;
-  height: 100%;
-  image-rendering: auto;
-  filter: blur(6px);
+  border-radius: inherit;
+}
+
+.aurora-bg::after {
+  /* Subtle dark overlay so UI text stays readable */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 8, 18, 0.45);
+  z-index: 1;
+}
+
+
+
+
+.aurora-orb {
+  position: absolute;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+/* Orb 1 – large, accent, floats top-left → bottom-right */
+.aurora-orb-1 {
+  width: 75%;
+  height: 90%;
+  top: -20%;
+  left: -10%;
+  background: radial-gradient(ellipse at center,
+      var(--accent) 0%,
+      color-mix(in srgb, var(--accent) 40%, transparent) 50%,
+      transparent 75%);
+  opacity: 0.9;
+  animation: auroraOrb1 7s ease-in-out infinite alternate;
+}
+
+/* Orb 2 – large, accent-2, floats top-right → bottom-left */
+.aurora-orb-2 {
+  width: 80%;
+  height: 85%;
+  top: 5%;
+  right: -15%;
+  background: radial-gradient(ellipse at center,
+      var(--accent-2) 0%,
+      color-mix(in srgb, var(--accent-2) 35%, transparent) 50%,
+      transparent 75%);
   opacity: 0.85;
+  animation: auroraOrb2 11s ease-in-out infinite alternate;
+}
+
+/* Orb 3 – medium, accent blend, bottom-center anchor */
+.aurora-orb-3 {
+  width: 65%;
+  height: 70%;
+  bottom: -15%;
+  left: 15%;
+  background: radial-gradient(ellipse at center,
+      color-mix(in srgb, var(--accent) 55%, var(--accent-2)) 0%,
+      color-mix(in srgb, var(--accent) 25%, transparent) 55%,
+      transparent 78%);
+  opacity: 0.75;
+  animation: auroraOrb3 9s ease-in-out infinite alternate;
+}
+
+/* Orb 4 – smaller, accent-2 tint, wanders center */
+.aurora-orb-4 {
+  width: 50%;
+  height: 60%;
+  top: 20%;
+  left: 25%;
+  background: radial-gradient(ellipse at center,
+      color-mix(in srgb, var(--accent-2) 60%, var(--accent)) 0%,
+      color-mix(in srgb, var(--accent-2) 20%, transparent) 55%,
+      transparent 80%);
+  opacity: 0.65;
+  animation: auroraOrb4 14s ease-in-out infinite alternate;
+}
+
+@keyframes auroraOrb1 {
+  0% {
+    transform: translate(0%, 0%) scale(1.00);
+  }
+
+  33% {
+    transform: translate(18%, -12%) scale(1.08);
+  }
+
+  66% {
+    transform: translate(-8%, 20%) scale(0.94);
+  }
+
+  100% {
+    transform: translate(30%, 8%) scale(1.05);
+  }
+}
+
+@keyframes auroraOrb2 {
+  0% {
+    transform: translate(0%, 0%) scale(1.00);
+  }
+
+  40% {
+    transform: translate(-22%, 15%) scale(1.10);
+  }
+
+  75% {
+    transform: translate(12%, -20%) scale(0.90);
+  }
+
+  100% {
+    transform: translate(-30%, 5%) scale(1.04);
+  }
+}
+
+@keyframes auroraOrb3 {
+  0% {
+    transform: translate(0%, 0%) scale(1.00);
+  }
+
+  50% {
+    transform: translate(20%, -18%) scale(1.12);
+  }
+
+  100% {
+    transform: translate(-15%, 12%) scale(0.92);
+  }
+}
+
+@keyframes auroraOrb4 {
+  0% {
+    transform: translate(0%, 0%) scale(1.00);
+  }
+
+  30% {
+    transform: translate(-18%, 14%) scale(1.06);
+  }
+
+  70% {
+    transform: translate(22%, -10%) scale(0.96);
+  }
+
+  100% {
+    transform: translate(10%, 20%) scale(1.08);
+  }
 }
 
 /* ─── header ─── */

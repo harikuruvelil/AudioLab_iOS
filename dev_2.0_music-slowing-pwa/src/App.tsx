@@ -492,7 +492,7 @@ export default function App() {
   const onTrackEndedRef = useRef<() => Promise<void> | void>(() => { });
   const queueRef = useRef<string[]>([]);
   const appRootRef = useRef<HTMLDivElement | null>(null);
-  const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const bgPhaseRef = useRef(0);
   const bgSmoothedRef = useRef(0);
   const bgTargetRef = useRef(0);
@@ -1164,198 +1164,8 @@ export default function App() {
     playback.isPlaying
   ]);
 
-  // ─── flowing gradient canvas (liquid aurora) ───
-  useEffect(() => {
-    const canvas = particleCanvasRef.current;
-    if (!canvas) return;
-    if (!backgroundMotionEnabled) {
-      const clearCtx = canvas.getContext("2d", { alpha: true });
-      if (clearCtx) clearCtx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
 
-    const ctx = canvas.getContext("2d", { alpha: true });
-    if (!ctx) return;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // Higher resolution for visible detail (0.5× native)
-    const SCALE = 0.5;
-    let cw = 1;
-    let ch = 1;
-    let imgData: ImageData;
-    let buf: Uint8ClampedArray;
-
-    const resize = () => {
-      cw = Math.max(1, Math.floor(canvas.clientWidth * dpr * SCALE));
-      ch = Math.max(1, Math.floor(canvas.clientHeight * dpr * SCALE));
-      if (canvas.width !== cw || canvas.height !== ch) {
-        canvas.width = cw;
-        canvas.height = ch;
-        imgData = ctx.createImageData(cw, ch);
-        buf = imgData.data;
-      }
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    // Perlin noise with permutation table
-    const perm = new Uint8Array(512);
-    const gradients = [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
-    const permSeed = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) permSeed[i] = i;
-    for (let i = 255; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = permSeed[i]; permSeed[i] = permSeed[j]; permSeed[j] = tmp;
-    }
-    for (let i = 0; i < 512; i++) perm[i] = permSeed[i & 255];
-
-    const noise2D = (x: number, y: number): number => {
-      const xi = Math.floor(x) & 255;
-      const yi = Math.floor(y) & 255;
-      const xf = x - Math.floor(x);
-      const yf = y - Math.floor(y);
-      const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10); // quintic
-      const v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
-
-      const g00 = gradients[perm[xi + perm[yi]] & 7];
-      const g10 = gradients[perm[xi + 1 + perm[yi]] & 7];
-      const g01 = gradients[perm[xi + perm[yi + 1]] & 7];
-      const g11 = gradients[perm[xi + 1 + perm[yi + 1]] & 7];
-
-      const d00 = g00[0] * xf + g00[1] * yf;
-      const d10 = g10[0] * (xf - 1) + g10[1] * yf;
-      const d01 = g01[0] * xf + g01[1] * (yf - 1);
-      const d11 = g11[0] * (xf - 1) + g11[1] * (yf - 1);
-
-      const x1 = d00 + u * (d10 - d00);
-      const x2 = d01 + u * (d11 - d01);
-      return x1 + v * (x2 - x1); // range ~ [-0.7, 0.7]
-    };
-
-    // Multi-octave FBM
-    const fbm = (x: number, y: number, octaves: number): number => {
-      let val = 0;
-      let amp = 0.5;
-      let freq = 1;
-      for (let i = 0; i < octaves; i++) {
-        val += amp * noise2D(x * freq, y * freq);
-        freq *= 2.0;
-        amp *= 0.5;
-      }
-      return val;
-    };
-
-    // Domain-warped FBM for swirling organic shapes
-    const warpedFbm = (x: number, y: number, t: number): number => {
-      const qx = fbm(x + t * 0.3, y + t * 0.2, 3);
-      const qy = fbm(x + 5.2 + t * 0.15, y + 1.3 - t * 0.25, 3);
-      return fbm(x + 3.2 * qx + t * 0.08, y + 3.2 * qy - t * 0.12, 4);
-    };
-
-    // Build 5 color palette from theme
-    const hexToRgb = (hex: string) => ({
-      r: parseInt(hex.slice(1, 3), 16),
-      g: parseInt(hex.slice(3, 5), 16),
-      b: parseInt(hex.slice(5, 7), 16)
-    });
-    const accent = hexToRgb(appearanceTheme.accent);
-    const accent2 = hexToRgb(appearanceTheme.accent2);
-    // Derive a highlight (lighter), a deep shadow, and a mid-blend
-    const highlight = {
-      r: Math.min(255, accent.r + 80),
-      g: Math.min(255, accent.g + 60),
-      b: Math.min(255, accent2.b + 50)
-    };
-    const shadow = {
-      r: Math.floor(accent2.r * 0.25),
-      g: Math.floor(accent2.g * 0.25),
-      b: Math.floor(accent2.b * 0.35)
-    };
-    const mid = {
-      r: Math.floor((accent.r + accent2.r) * 0.5),
-      g: Math.floor((accent.g + accent2.g) * 0.45),
-      b: Math.floor((accent.b + accent2.b) * 0.55)
-    };
-
-    const palette = [accent, accent2, highlight, shadow, mid];
-
-    let rafId = 0;
-    let t = Math.random() * 100;
-    let lastTs = 0;
-
-    const draw = (now: number) => {
-      if (document.hidden) { rafId = requestAnimationFrame(draw); return; }
-
-      const dt = lastTs > 0 ? Math.min(50, now - lastTs) : 16;
-      lastTs = now;
-
-      // Constant slow flow speed
-      t += dt * 0.00025;
-
-      if (!imgData || !buf) { resize(); }
-      const noiseScale = 0.012;
-
-      for (let y = 0; y < ch; y++) {
-        const ny = y * noiseScale;
-        for (let x = 0; x < cw; x++) {
-          const nx = x * noiseScale;
-
-          // Three warped noise layers at different scales/speeds
-          const n1 = warpedFbm(nx, ny, t);
-          const n2 = warpedFbm(nx * 0.7 + 10, ny * 0.7 + 10, t * 1.3);
-          const n3 = noise2D(nx * 2.5 + t * 0.6, ny * 2.5 - t * 0.4);
-
-          // Map noise to palette indices via smooth blending
-          const v1 = (n1 + 0.7) * 0.71; // normalize ~[0,1]
-          const v2 = (n2 + 0.7) * 0.71;
-          const v3 = (n3 + 0.7) * 0.71;
-
-          // Pick two palette colors and blend based on noise
-          const idx1 = Math.abs(n1 * 7.3) % 5;
-          const idx2 = Math.abs(n2 * 5.7) % 5;
-          const frac1 = idx1 - Math.floor(idx1);
-          const frac2 = idx2 - Math.floor(idx2);
-          const c1 = palette[Math.floor(idx1) % 5];
-          const c2 = palette[(Math.floor(idx1) + 1) % 5];
-          const c3 = palette[Math.floor(idx2) % 5];
-          const c4 = palette[(Math.floor(idx2) + 1) % 5];
-
-          // Lerp each pair
-          const r1 = c1.r + (c2.r - c1.r) * frac1;
-          const g1 = c1.g + (c2.g - c1.g) * frac1;
-          const b1 = c1.b + (c2.b - c1.b) * frac1;
-          const r2 = c3.r + (c4.r - c3.r) * frac2;
-          const g2 = c3.g + (c4.g - c3.g) * frac2;
-          const b2 = c3.b + (c4.b - c3.b) * frac2;
-
-          // Final blend: mix two layers + add specular highlight
-          const blend = v1;
-          const specular = Math.max(0, n3) * 0.35;
-          const luminance = 0.42 + v2 * 0.25 + specular;
-
-          const r = (r1 * blend + r2 * (1 - blend)) * luminance;
-          const g = (g1 * blend + g2 * (1 - blend)) * luminance;
-          const b = (b1 * blend + b2 * (1 - blend)) * luminance;
-
-          const px = (y * cw + x) * 4;
-          buf[px] = Math.min(255, r);
-          buf[px + 1] = Math.min(255, g);
-          buf[px + 2] = Math.min(255, b);
-          buf[px + 3] = 200;
-        }
-      }
-
-      ctx.putImageData(imgData, 0, 0);
-      rafId = requestAnimationFrame(draw);
-    };
-
-    rafId = requestAnimationFrame(draw);
-
-    return () => {
-      window.removeEventListener("resize", resize);
-      cancelAnimationFrame(rafId);
-    };
-  }, [appearanceTheme, backgroundMotionEnabled]);
 
   useEffect(() => {
     if (!darkLockActive) {
@@ -1368,8 +1178,8 @@ export default function App() {
     }, 2400);
     return () => window.clearTimeout(timeoutId);
   }, [darkLockActive]);
-
-
+  
+  
   const appStyle = useMemo(
     () => ({
       "--accent": appearanceTheme.accent,
@@ -1392,12 +1202,12 @@ export default function App() {
     }) as CSSProperties,
     [appearanceTheme]
   );
-
+  
   const selectedTrack = useMemo(() => {
     if (!effectiveTrackId) return null;
     return tracks.find((track) => track.id === effectiveTrackId) ?? null;
   }, [tracks, effectiveTrackId]);
-
+  
   const queueTracks = useMemo(
     () =>
       queueTrackIds
@@ -1405,12 +1215,12 @@ export default function App() {
         .filter((track): track is TrackMeta => track !== null),
     [queueTrackIds, tracks]
   );
-
+  
   const currentIndex = useMemo(() => {
     if (!effectiveTrackId) return -1;
     return tracks.findIndex((track) => track.id === effectiveTrackId);
   }, [tracks, effectiveTrackId]);
-
+  
   const canGoPrev =
     tracks.length > 0 &&
     (playback.currentTime > 3 ||
@@ -1423,28 +1233,28 @@ export default function App() {
       (shuffleEnabled
         ? trackIds.length > 1 || repeatMode === "all"
         : currentIndex < tracks.length - 1 || repeatMode !== "off"));
-
+  
   const handleTogglePlay = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine) return;
-
+  
     if (playback.isPlaying) {
       engine.pause();
       return;
     }
-
+  
     const targetId = effectiveTrackId ?? tracks[0]?.id;
     if (!targetId) {
       showToast("Import a track from Library first.");
       setActiveTab("library");
       return;
     }
-
+  
     if (playback.trackId === targetId && playback.isReady) {
       await engine.play();
       return;
     }
-
+  
     await playTrackById(targetId, { registerShuffleSelection: true });
   }, [
     effectiveTrackId,
@@ -1455,42 +1265,42 @@ export default function App() {
     showToast,
     tracks
   ]);
-
+  
   const handleRateChange = useCallback((nextRate: number) => {
     engineRef.current?.setRate(nextRate);
   }, []);
-
+  
   const handleSeekCommit = useCallback((targetSeconds: number) => {
     engineRef.current?.seek(targetSeconds);
   }, []);
-
+  
   const handleReverbEnabledChange = useCallback((enabled: boolean) => {
     engineRef.current?.setReverbEnabled(enabled);
   }, []);
-
+  
   const handleReverbPresetChange = useCallback(async (presetId: ReverbPresetId) => {
     const engine = engineRef.current;
     if (!engine) return;
     await engine.setReverbPreset(presetId);
   }, []);
-
+  
   const handleReverbWetChange = useCallback((wet: number) => {
     engineRef.current?.setReverbWet(wet);
   }, []);
-
+  
   const handleNextReverbPreset = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine) return;
-
+  
     const index = REVERB_PRESETS.findIndex((preset) => preset.id === playback.reverbPresetId);
     const nextIndex = index >= 0 ? (index + 1) % REVERB_PRESETS.length : 0;
     await engine.setReverbPreset(REVERB_PRESETS[nextIndex].id);
   }, [playback.reverbPresetId]);
-
+  
   const handleEqEnabledChange = useCallback((enabled: boolean) => {
     engineRef.current?.setEqEnabled(enabled);
   }, []);
-
+  
   const handleEqBandConfigChange = useCallback(
     (
       bandId: string,
@@ -1501,7 +1311,7 @@ export default function App() {
     },
     []
   );
-
+  
   const handleEqResetFlat = useCallback(() => {
     if (isEqCustomSlotName(eqCurveSelection)) {
       const flatBands = createDefaultEqBands();
@@ -1517,74 +1327,74 @@ export default function App() {
     engineRef.current?.setEqPreset("Flat");
     setEqCurveSelection("Flat");
   }, [eqCurveSelection]);
-
+  
   const handleEqCurveSelectionChange = useCallback(
     (selection: EqCurveSelection) => {
       const engine = engineRef.current;
       if (!engine) return;
-
+  
       setEqCurveSelection(selection);
       if (isEqPresetName(selection)) {
         engine.setEqPreset(selection);
         return;
       }
-
+  
       const slotIndex = EQ_CUSTOM_SLOT_NAMES.indexOf(selection);
       const slotBands = eqCustomSlots[slotIndex] ?? createDefaultEqBands();
       engine.setEqBands(slotBands, null);
     },
     [eqCustomSlots]
   );
-
+  
   const handleWaveformEnabledChange = useCallback((enabled: boolean) => {
     setWaveformEnabled(enabled);
   }, []);
-
+  
   const handleWaveformModeChange = useCallback((mode: WaveformMode) => {
     setWaveformMode(mode);
   }, []);
-
+  
   const handleWaveformTargetFpsChange = useCallback((nextFps: number) => {
     setWaveformTargetFps(clamp(Math.round(nextFps), 24, 120));
   }, []);
-
+  
   const handleWaveformColorChange = useCallback((nextColor: string) => {
     setWaveformColor(sanitizeWaveformColor(nextColor));
   }, []);
-
+  
   const handleBackgroundMotionEnabledChange = useCallback((enabled: boolean) => {
     setBackgroundMotionEnabled(enabled);
   }, []);
-
+  
   const handleBackgroundBassReactiveEnabledChange = useCallback((enabled: boolean) => {
     setBackgroundBassReactiveEnabled(enabled);
   }, []);
-
+  
   const handleBackgroundBassReactionChange = useCallback((next: number) => {
     setBackgroundBassReaction(clamp(next, 0, 3));
   }, []);
-
+  
   const handleBgBassLowChange = useCallback((v: number) => {
     setBgBassLow(clamp(Math.round(v), 20, 400));
   }, []);
-
+  
   const handleBgBassHighChange = useCallback((v: number) => {
     setBgBassHigh(clamp(Math.round(v), 60, 800));
   }, []);
-
+  
   const handleBgBassThresholdChange = useCallback((v: number) => {
     setBgBassThreshold(clamp(v, 0.005, 0.2));
   }, []);
-
+  
   const handleDarkLockActiveChange = useCallback((active: boolean) => {
     setDarkLockActive(active);
   }, []);
-
+  
   const handleAppearanceThemeChange = useCallback((themeId: string) => {
     if (!Object.prototype.hasOwnProperty.call(APPEARANCE_THEMES, themeId)) return;
     setAppearanceThemeId(themeId as AppearanceThemeId);
   }, []);
-
+  
   const getWaveformAnalysers = useCallback((): WaveformAnalyserNodes => {
     return (
       engineRef.current?.getWaveformAnalyserNodes() ?? {
@@ -1594,15 +1404,15 @@ export default function App() {
       }
     );
   }, []);
-
+  
   const getEqGraphCurve = useCallback(() => {
     return engineRef.current?.getEqGraphCurve() ?? null;
   }, []);
-
+  
   const handleToggleShuffle = useCallback(() => {
     const nextEnabled = !shuffleEnabled;
     setShuffleEnabled(nextEnabled);
-
+  
     if (nextEnabled) {
       seedShuffleState(effectiveTrackId);
     } else {
@@ -1611,7 +1421,7 @@ export default function App() {
       shufflePoolRef.current = [];
     }
   }, [effectiveTrackId, seedShuffleState, shuffleEnabled]);
-
+  
   const handleCycleRepeatMode = useCallback(() => {
     setRepeatMode((previous) => {
       if (previous === "off") return "one";
@@ -1619,25 +1429,25 @@ export default function App() {
       return "off";
     });
   }, []);
-
+  
   const handlePrev = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine || tracks.length === 0) return;
-
+  
     if (playback.currentTime > 3 && playback.isReady) {
       engine.seek(0);
       return;
     }
-
+  
     const currentId = effectiveTrackId;
     if (!currentId) return;
-
+  
     const prevId = shuffleEnabled
       ? getShufflePrevTrackId(currentId)
       : getSequentialPrevTrackId(currentId);
-
+  
     if (!prevId) return;
-
+  
     await playTrackById(prevId, { registerShuffleSelection: false });
   }, [
     effectiveTrackId,
@@ -1649,24 +1459,24 @@ export default function App() {
     shuffleEnabled,
     tracks.length
   ]);
-
+  
   const handleNext = useCallback(async () => {
     if (tracks.length === 0) return;
-
+  
     const queuedNextId = dequeueNextQueuedTrackId();
     if (queuedNextId) {
       await playTrackById(queuedNextId, { registerShuffleSelection: true });
       return;
     }
-
+  
     const currentId = effectiveTrackId ?? tracks[0].id;
-
+  
     const nextId = shuffleEnabled
       ? getShuffleNextTrackId(currentId)
       : getSequentialNextTrackId(currentId);
-
+  
     if (!nextId) return;
-
+  
     await playTrackById(nextId, { registerShuffleSelection: false });
   }, [
     dequeueNextQueuedTrackId,
@@ -1677,13 +1487,13 @@ export default function App() {
     shuffleEnabled,
     tracks
   ]);
-
+  
   const handleImportFiles = useCallback(
     async (fileList: FileList | null) => {
       if (!fileList || fileList.length === 0) return;
-
+  
       setIsImporting(true);
-
+  
       for (const file of Array.from(fileList)) {
         if (!isSupportedAudioFileName(file.name)) {
           showToast(
@@ -1691,7 +1501,7 @@ export default function App() {
           );
           continue;
         }
-
+  
         let durationSeconds = 0;
         try {
           durationSeconds = await probeDurationFromFile(file);
@@ -1699,7 +1509,7 @@ export default function App() {
           durationSeconds = 0;
           showToast(`Imported "${file.name}" with unknown duration.`);
         }
-
+  
         const track: TrackMeta = {
           id: createTrackId(),
           filename: file.name,
@@ -1709,45 +1519,52 @@ export default function App() {
           mimeType: file.type || getMimeFromFileName(file.name),
           sizeBytes: file.size
         };
-
+  
         try {
           await putTrack(track, file);
         } catch {
           showToast(`Failed to import "${file.name}".`);
         }
       }
-
+  
       setIsImporting(false);
       await refreshLibrary();
     },
     [refreshLibrary, showToast]
   );
-
+  
   const handleDeleteTrack = useCallback(
     async (trackId: string) => {
       const engine = engineRef.current;
       if (engine) {
         engine.clearTrack(trackId);
       }
-
+  
       if (queueRef.current.includes(trackId)) {
         setQueue(queueRef.current.filter((id) => id !== trackId));
       }
-
+  
       await deleteTrackById(trackId);
       await refreshLibrary();
     },
     [refreshLibrary, setQueue]
   );
-
+  
   return (
     <div className="app-root" ref={appRootRef} style={appStyle}>
-      <canvas className="particle-canvas" ref={particleCanvasRef} aria-hidden="true" />
+      {backgroundMotionEnabled && (
+        <div className="aurora-bg" aria-hidden="true">
+          <div className="aurora-orb aurora-orb-1" />
+          <div className="aurora-orb aurora-orb-2" />
+          <div className="aurora-orb aurora-orb-3" />
+          <div className="aurora-orb aurora-orb-4" />
+        </div>
+      )}
       <header className="app-header">
         <p className="app-kicker">Audio Lab</p>
         <h1>Slowed HQ</h1>
       </header>
-
+  
       <main className="app-main">
         {activeTab === "library" ? (
           <LibraryScreen
@@ -1824,7 +1641,7 @@ export default function App() {
           />
         )}
       </main>
-
+  
       <nav className="tabbar">
         <button
           type="button"
@@ -1833,7 +1650,7 @@ export default function App() {
         >
           Player
         </button>
-
+  
         <button
           type="button"
           className={`tabbar-button ${activeTab === "library" ? "is-active" : ""}`}
@@ -1842,7 +1659,7 @@ export default function App() {
           Library
         </button>
       </nav>
-
+  
       {darkLockActive ? (
         <div className="dark-lock-overlay" role="dialog" aria-label="Dark lock screen">
           {darkLockHintVisible ? (
@@ -1860,7 +1677,7 @@ export default function App() {
           </button>
         </div>
       ) : null}
-
+  
       <Toast message={toastMessage} />
     </div>
   );
