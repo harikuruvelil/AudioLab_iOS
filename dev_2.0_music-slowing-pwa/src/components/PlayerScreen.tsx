@@ -397,17 +397,15 @@ export function PlayerScreen({
     const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
     const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
 
-    // On coarse-pointer (mobile/touch) devices, always cap at 30fps.
-    // shadowBlur on canvas is extremely GPU-expensive on iOS — at 120fps it
-    // saturates the GPU and blocks all touch event processing.
+    // Keep overlays lighter, but allow high-refresh waveform on capable devices.
     const isMobile = typeof window.matchMedia === "function"
       && window.matchMedia("(pointer: coarse)").matches;
-    const targetFps = isMobile
-      ? Math.min(30, requestedFps)
-      : (uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps);
-    const highRefreshMode = !isMobile && targetFps >= 96;
-    const ultraRefreshMode = !isMobile && targetFps >= 115;
-    // Disable glow passes on mobile — they're the #1 GPU cost on iOS
+    const targetFps = uiOverlayOpen
+      ? Math.max(24, Math.min(requestedFps, isMobile ? 60 : 72))
+      : requestedFps;
+    const highRefreshMode = targetFps >= 96;
+    const ultraRefreshMode = targetFps >= 115;
+    // Disable glow passes on mobile. They are the most expensive canvas effect on iOS.
     const glowEnabled = !isMobile;
     const dpr = isMobile
       ? Math.min(window.devicePixelRatio || 1, 1.0)
@@ -448,15 +446,16 @@ export function PlayerScreen({
       context2d.lineWidth = Math.max(1.1, dpr);
       context2d.stroke();
 
-      // Subtle center glow
-      context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.15)`;
-      context2d.shadowBlur = 12 * dpr;
-      context2d.beginPath();
-      context2d.moveTo(0, y);
-      context2d.lineTo(width, y);
-      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`;
-      context2d.stroke();
-      context2d.shadowBlur = 0;
+      if (glowEnabled) {
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.15)`;
+        context2d.shadowBlur = 12 * dpr;
+        context2d.beginPath();
+        context2d.moveTo(0, y);
+        context2d.lineTo(width, y);
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`;
+        context2d.stroke();
+        context2d.shadowBlur = 0;
+      }
     };
 
     const drawLinear = (analyser: AnalyserNode) => {
@@ -469,16 +468,19 @@ export function PlayerScreen({
 
       const width = frameWidth;
       const height = frameHeight;
-      // Use more points for higher fidelity at 120Hz
+      // Use a lighter point budget in ultra-refresh mode to keep UI smooth.
       const maxPoints = isMobile
-        ? Math.max(200, Math.min(300, Math.floor(width / Math.max(1.2, dpr * 1.2))))
-        : highRefreshMode
+        ? ultraRefreshMode
+          ? Math.max(140, Math.min(220, Math.floor(width / Math.max(1.9, dpr * 1.9))))
+          : Math.max(190, Math.min(310, Math.floor(width / Math.max(1.35, dpr * 1.35))))
+        : ultraRefreshMode
+          ? Math.max(280, Math.min(760, Math.floor(width / Math.max(1.1, dpr))))
+          : highRefreshMode
           ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
           : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
-      const totalPoints = Math.floor(waveform.length / stride);
+      const totalPoints = Math.max(2, Math.floor(waveform.length / stride));
 
-      // Build path with Catmull-Rom interpolation for smoothness
       context2d.beginPath();
       const getY = (idx: number) => {
         const cIdx = clamp(idx * stride, 0, waveform.length - 1);
@@ -486,20 +488,31 @@ export function PlayerScreen({
         return height * 0.5 + normalized * height * 0.38;
       };
 
-      for (let i = 0; i < totalPoints; i++) {
-        const x = (i / (totalPoints - 1)) * width;
-        const y = getY(i);
-        if (i === 0) {
-          context2d.moveTo(x, y);
-        } else if (i < totalPoints - 1) {
-          // Use quadratic bezier for smoothness
-          const prevX = ((i - 1) / (totalPoints - 1)) * width;
-          const prevY = getY(i - 1);
-          const cpx = (prevX + x) / 2;
-          const cpy = (prevY + y) / 2;
-          context2d.quadraticCurveTo(prevX, prevY, cpx, cpy);
-        } else {
-          context2d.lineTo(x, y);
+      if (ultraRefreshMode) {
+        for (let i = 0; i < totalPoints; i++) {
+          const x = (i / (totalPoints - 1)) * width;
+          const y = getY(i);
+          if (i === 0) {
+            context2d.moveTo(x, y);
+          } else {
+            context2d.lineTo(x, y);
+          }
+        }
+      } else {
+        for (let i = 0; i < totalPoints; i++) {
+          const x = (i / (totalPoints - 1)) * width;
+          const y = getY(i);
+          if (i === 0) {
+            context2d.moveTo(x, y);
+          } else if (i < totalPoints - 1) {
+            const prevX = ((i - 1) / (totalPoints - 1)) * width;
+            const prevY = getY(i - 1);
+            const cpx = (prevX + x) / 2;
+            const cpy = (prevY + y) / 2;
+            context2d.quadraticCurveTo(prevX, prevY, cpx, cpy);
+          } else {
+            context2d.lineTo(x, y);
+          }
         }
       }
 
@@ -540,9 +553,13 @@ export function PlayerScreen({
       const cy = height * 0.5;
       const baseRadius = Math.min(width, height) * 0.28;
       const amplitudeScale = Math.min(width, height) * 0.14;
-      const maxPoints = highRefreshMode
-        ? Math.max(180, Math.min(520, Math.floor(width / Math.max(1.0, dpr * 1.1))))
-        : Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
+      const maxPoints = isMobile
+        ? ultraRefreshMode
+          ? Math.max(96, Math.min(180, Math.floor(width / Math.max(2.0, dpr * 2.0))))
+          : Math.max(140, Math.min(260, Math.floor(width / Math.max(1.5, dpr * 1.6))))
+        : highRefreshMode
+          ? Math.max(180, Math.min(520, Math.floor(width / Math.max(1.0, dpr * 1.1))))
+          : Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
 
       context2d.beginPath();
@@ -580,7 +597,7 @@ export function PlayerScreen({
     let cachedAnalysers = getWaveformAnalysers();
     let analyserRefreshCounter = 0;
     let lastRenderedAt = 0;
-    const minFrameMs = 1000 / targetFps;
+    const minFrameMs = ultraRefreshMode ? 0 : (1000 / targetFps);
     const analyserRefreshFrames = highRefreshMode ? 36 : Math.max(30, Math.floor(targetFps));
 
     const drawFrame = (timestamp: number) => {
@@ -588,7 +605,7 @@ export function PlayerScreen({
         rafHandle = window.requestAnimationFrame(drawFrame);
         return;
       }
-      if (lastRenderedAt > 0 && timestamp - lastRenderedAt < minFrameMs) {
+      if (minFrameMs > 0 && lastRenderedAt > 0 && timestamp - lastRenderedAt < minFrameMs) {
         rafHandle = window.requestAnimationFrame(drawFrame);
         return;
       }

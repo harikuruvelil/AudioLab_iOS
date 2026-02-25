@@ -350,7 +350,7 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
   const waveformTargetFps =
     typeof value.waveformTargetFps === "number"
       ? clamp(Math.round(value.waveformTargetFps), 24, 120)
-      : 60;
+      : 120;
   const waveformColor = sanitizeWaveformColor(value.waveformColor);
   const backgroundMotionEnabled =
     typeof value.backgroundMotionEnabled === "boolean"
