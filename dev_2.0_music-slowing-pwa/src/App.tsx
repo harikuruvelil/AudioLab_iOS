@@ -470,7 +470,7 @@ export default function App() {
     initialAudioSettings?.waveformMode ?? "linear"
   );
   const [waveformTargetFps, setWaveformTargetFps] = useState<number>(
-    initialAudioSettings?.waveformTargetFps ?? 60
+    initialAudioSettings?.waveformTargetFps ?? 120
   );
   const [waveformColor, setWaveformColor] = useState<string>(
     initialAudioSettings?.waveformColor ?? "#65d4ff"
