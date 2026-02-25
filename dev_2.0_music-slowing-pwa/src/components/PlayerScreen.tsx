@@ -396,12 +396,24 @@ export function PlayerScreen({
 
     const uiOverlayOpen = isSettingsOpen || isQueueOpen || isAppearanceOpen;
     const requestedFps = clamp(Math.round(waveformTargetFps), 24, 120);
-    const targetFps = uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps;
-    const highRefreshMode = targetFps >= 96;
-    const ultraRefreshMode = targetFps >= 115;
-    const dpr = highRefreshMode
-      ? Math.min(window.devicePixelRatio || 1, 1.35)
-      : Math.min(window.devicePixelRatio || 1, 2);
+
+    // On coarse-pointer (mobile/touch) devices, always cap at 30fps.
+    // shadowBlur on canvas is extremely GPU-expensive on iOS — at 120fps it
+    // saturates the GPU and blocks all touch event processing.
+    const isMobile = typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches;
+    const targetFps = isMobile
+      ? Math.min(30, requestedFps)
+      : (uiOverlayOpen ? Math.max(24, Math.min(requestedFps, 72)) : requestedFps);
+    const highRefreshMode = !isMobile && targetFps >= 96;
+    const ultraRefreshMode = !isMobile && targetFps >= 115;
+    // Disable glow passes on mobile — they're the #1 GPU cost on iOS
+    const glowEnabled = !isMobile;
+    const dpr = isMobile
+      ? Math.min(window.devicePixelRatio || 1, 1.0)
+      : highRefreshMode
+        ? Math.min(window.devicePixelRatio || 1, 1.35)
+        : Math.min(window.devicePixelRatio || 1, 2);
     const rgb = hexToRgb(waveformColor);
     const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.92)`;
     const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.85)`;
@@ -458,9 +470,11 @@ export function PlayerScreen({
       const width = frameWidth;
       const height = frameHeight;
       // Use more points for higher fidelity at 120Hz
-      const maxPoints = highRefreshMode
-        ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
-        : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
+      const maxPoints = isMobile
+        ? Math.max(200, Math.min(300, Math.floor(width / Math.max(1.2, dpr * 1.2))))
+        : highRefreshMode
+          ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
+          : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
       const totalPoints = Math.floor(waveform.length / stride);
 
@@ -489,7 +503,7 @@ export function PlayerScreen({
         }
       }
 
-      if (!highRefreshMode) {
+      if (glowEnabled && !highRefreshMode) {
         context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.55)`;
         context2d.shadowBlur = 22 * dpr;
         context2d.lineWidth = Math.max(3.5, dpr * 2.5);
@@ -497,7 +511,7 @@ export function PlayerScreen({
         context2d.stroke();
       }
 
-      if (!ultraRefreshMode) {
+      if (glowEnabled && !ultraRefreshMode) {
         context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.70)`;
         context2d.shadowBlur = highRefreshMode ? 5 * dpr : 8 * dpr;
         context2d.lineWidth = Math.max(2.2, dpr * 1.5);
@@ -546,7 +560,7 @@ export function PlayerScreen({
       }
       context2d.closePath();
 
-      if (!ultraRefreshMode) {
+      if (glowEnabled && !ultraRefreshMode) {
         context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.50)`;
         context2d.shadowBlur = highRefreshMode ? 8 * dpr : 14 * dpr;
         context2d.lineWidth = Math.max(2, dpr * 1.4);

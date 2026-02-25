@@ -1091,43 +1091,26 @@ export default function App() {
     if (!root) return;
 
     if (!backgroundMotionEnabled) {
-      bgSmoothedRef.current = 0;
-      bgTargetRef.current = 0;
-      bgBandFloorRef.current = { low: 0.02, mid: 0.018, high: 0.015 };
-      bgBandPeakRef.current = { low: 0.16, mid: 0.14, high: 0.12 };
-      bgPulseRef.current = 0;
-      bgLastRawBassRef.current = 0;
-      root.style.setProperty("--bg-energy", "0");
-      root.style.setProperty("--bg-pulse", "0");
-      root.style.setProperty("--bg-band-low", "0");
-      root.style.setProperty("--bg-band-mid", "0");
-      root.style.setProperty("--bg-band-high", "0");
-      root.style.setProperty("--bg-flow-shift-x", "0%");
-      root.style.setProperty("--bg-flow-shift-y", "0%");
-      root.style.setProperty("--bg-flow-angle-offset", "0deg");
-      root.style.setProperty("--bg-flow-distort", "0");
-      root.style.setProperty("--bg-reaction", "0");
+      // Find and reset the aurora-bg transform
+      const auroraEl = root.querySelector(".aurora-bg") as HTMLElement | null;
+      if (auroraEl) auroraEl.style.transform = "";
       return;
     }
 
+    // Detect coarse pointer (phones/tablets) — cap update rate more aggressively
+    const coarsePointer = typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches;
+
+    // On mobile: update at max 8fps (125ms). On desktop: 20fps (50ms).
+    // We only update a single CSS transform on a single element — no CSS var propagation.
+    const frameIntervalMs = coarsePointer ? 125 : 50;
+
     let rafId = 0;
-    let smoothed = bgSmoothedRef.current;
-    let targetEnergy = bgTargetRef.current;
     let phase = bgPhaseRef.current;
     let lastFrameTimestamp = 0;
-    let lastBassSampleTimestamp = 0;
-    const coarsePointer =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches;
-    const heavyVisualMode = activeTab === "player" && playback.isPlaying;
-    const frameIntervalMs = heavyVisualMode
-      ? (coarsePointer ? 1000 / 18 : 1000 / 24)
-      : (coarsePointer ? 1000 / 8 : 1000 / 12);
-    const bassSampleIntervalMs = heavyVisualMode
-      ? (coarsePointer ? 1000 / 14 : 1000 / 18)
-      : (coarsePointer ? 1000 / 7 : 1000 / 10);
-    const reactionStrength = clamp(backgroundBassReaction, 0, 3);
+
+    const auroraEl = root.querySelector(".aurora-bg") as HTMLElement | null;
+    if (!auroraEl) return;
 
     const tick = (now: number) => {
       if (document.hidden) {
@@ -1135,9 +1118,7 @@ export default function App() {
         return;
       }
 
-      if (lastFrameTimestamp <= 0) {
-        lastFrameTimestamp = now;
-      }
+      if (lastFrameTimestamp <= 0) lastFrameTimestamp = now;
       const elapsed = now - lastFrameTimestamp;
       if (elapsed < frameIntervalMs) {
         rafId = window.requestAnimationFrame(tick);
@@ -1145,117 +1126,23 @@ export default function App() {
       }
       lastFrameTimestamp = now;
 
-      const deltaMs = Math.min(80, Math.max(0, elapsed));
-      const deltaNorm = deltaMs / (1000 / 60);
-
-      if (
-        lastBassSampleTimestamp === 0 ||
-        now - lastBassSampleTimestamp >= bassSampleIntervalMs
-      ) {
-        lastBassSampleTimestamp = now;
-        if (backgroundBassReactiveEnabled) {
-          const profile: ReactiveEnergyProfile = engineRef.current?.getReactiveEnergyProfile(
-            bgBassLow,
-            bgBassHigh
-          ) ?? {
-            low: 0,
-            mid: 0,
-            high: 0,
-            pulse: 0,
-            overall: 0
-          };
-
-          const normalizeBand = (band: "low" | "mid" | "high", raw: number) => {
-            const floor = bgBandFloorRef.current[band] =
-              bgBandFloorRef.current[band] * 0.989 + raw * 0.011;
-            const peak = bgBandPeakRef.current[band] =
-              Math.max(raw, bgBandPeakRef.current[band] * 0.976);
-            const span = Math.max(bgBassThreshold * 0.7, peak - floor);
-            return clamp((raw - floor) / span, 0, 1);
-          };
-
-          const lowBand = normalizeBand("low", profile.low);
-          const midBand = normalizeBand("mid", profile.mid);
-          const highBand = normalizeBand("high", profile.high);
-          const transient = clamp(
-            profile.pulse + Math.max(0, profile.low - bgLastRawBassRef.current) * 1.5,
-            0,
-            1
-          );
-
-          targetEnergy = clamp(
-            lowBand * (0.68 + reactionStrength * 0.74) +
-            midBand * (0.38 + reactionStrength * 0.42) +
-            highBand * (0.22 + reactionStrength * 0.24) +
-            transient * (0.36 + reactionStrength * 0.64),
-            0,
-            2.3
-          );
-          bgPulseRef.current = Math.max(
-            bgPulseRef.current * 0.78,
-            transient * (0.58 + reactionStrength * 0.82)
-          );
-          bgLastRawBassRef.current = profile.low;
-          root.style.setProperty("--bg-band-low", lowBand.toFixed(4));
-          root.style.setProperty("--bg-band-mid", midBand.toFixed(4));
-          root.style.setProperty("--bg-band-high", highBand.toFixed(4));
-        } else {
-          targetEnergy = 0;
-          bgPulseRef.current *= 0.92;
-          bgLastRawBassRef.current = 0;
-          root.style.setProperty("--bg-band-low", "0");
-          root.style.setProperty("--bg-band-mid", "0");
-          root.style.setProperty("--bg-band-high", "0");
-        }
-      }
-
-      const smoothAlpha = clamp(0.13 * deltaNorm, 0.05, 0.28);
-      smoothed = smoothed * (1 - smoothAlpha) + targetEnergy * smoothAlpha;
-      phase += deltaMs * (heavyVisualMode ? 0.0014 : 0.0008);
-      bgSmoothedRef.current = smoothed;
-      bgTargetRef.current = targetEnergy;
+      const deltaMs = Math.min(120, Math.max(0, elapsed));
+      phase += deltaMs * 0.00045;
       bgPhaseRef.current = phase;
 
-      const baseMotion = heavyVisualMode ? 0.18 : 0.12;
-      const visualEnergy = clamp(
-        baseMotion +
-        (backgroundBassReactiveEnabled
-          ? heavyVisualMode
-            ? smoothed * (0.78 + reactionStrength * 0.30)
-            : smoothed * (0.46 + reactionStrength * 0.18)
-          : 0),
-        0,
-        1.85
-      );
-      const shiftX = Math.sin(phase) * (1.2 + visualEnergy * (4.2 + reactionStrength * 1.2));
-      const shiftY = Math.cos(phase * 0.83) * (0.9 + visualEnergy * (3.6 + reactionStrength * 1.0));
-      const angleOffset = Math.sin(phase * 0.57) * (1.5 + visualEnergy * (3.1 + reactionStrength * 0.8));
-      const pulse = clamp(bgPulseRef.current, 0, 1);
-      const flowDistort = clamp((visualEnergy * 0.42 + pulse * 0.58) / 1.4, 0, 1.1);
-
-      root.style.setProperty("--bg-energy", visualEnergy.toFixed(4));
-      root.style.setProperty("--bg-pulse", pulse.toFixed(4));
-      root.style.setProperty("--bg-reaction", reactionStrength.toFixed(4));
-      root.style.setProperty("--bg-flow-shift-x", `${shiftX.toFixed(3)}%`);
-      root.style.setProperty("--bg-flow-shift-y", `${shiftY.toFixed(3)}%`);
-      root.style.setProperty("--bg-flow-angle-offset", `${angleOffset.toFixed(3)}deg`);
-      root.style.setProperty("--bg-flow-distort", flowDistort.toFixed(4));
+      // Subtle breathing shift: ±3% x/y. This is the ONLY property updated per frame.
+      // It's applied directly to the element (not :root) so only this element repaints.
+      const shiftX = Math.sin(phase) * 3.0;
+      const shiftY = Math.cos(phase * 0.83) * 2.5;
+      auroraEl.style.transform = `translate(${shiftX.toFixed(2)}%, ${shiftY.toFixed(2)}%)`;
 
       rafId = window.requestAnimationFrame(tick);
     };
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [
-    activeTab,
-    backgroundBassReaction,
-    backgroundBassReactiveEnabled,
-    backgroundMotionEnabled,
-    bgBassHigh,
-    bgBassLow,
-    bgBassThreshold,
-    playback.isPlaying
-  ]);
+  }, [backgroundMotionEnabled]);
+
   // PWA resume lifecycle: iOS can suspend/close audio when app backgrounds.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1723,10 +1610,10 @@ export default function App() {
     <div className="app-root" ref={appRootRef} style={appStyle}>
       {backgroundMotionEnabled && (
         <div className="aurora-bg" aria-hidden="true">
-          <div className="flow-ribbon flow-ribbon-back" />
-          <div className="flow-ribbon flow-ribbon-mid" />
-          <div className="flow-ribbon flow-ribbon-front" />
-          <div className="flow-speckle" />
+          <div className="aurora-orb aurora-orb-1" />
+          <div className="aurora-orb aurora-orb-2" />
+          <div className="aurora-orb aurora-orb-3" />
+          <div className="aurora-orb aurora-orb-4" />
         </div>
       )}
       <header className="app-header">
