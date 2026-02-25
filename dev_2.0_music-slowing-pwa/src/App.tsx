@@ -1164,8 +1164,24 @@ export default function App() {
     playback.isPlaying
   ]);
 
-
-
+  // ─── PWA resume: iOS suspends AudioContext when app backgrounds ───
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        const engine = engineRef.current;
+        if (engine) {
+          // The engine's ensureContext() already checks for suspended state
+          // and calls context.resume(). We invoke it on any user-gesture-
+          // adjacent event (visibility change counts on iOS).
+          engine.ensureContext().catch(() => {
+            // Silently swallow — the context will resume on next play tap
+          });
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
 
   useEffect(() => {
     if (!darkLockActive) {
@@ -1178,8 +1194,8 @@ export default function App() {
     }, 2400);
     return () => window.clearTimeout(timeoutId);
   }, [darkLockActive]);
-  
-  
+
+
   const appStyle = useMemo(
     () => ({
       "--accent": appearanceTheme.accent,
@@ -1202,12 +1218,12 @@ export default function App() {
     }) as CSSProperties,
     [appearanceTheme]
   );
-  
+
   const selectedTrack = useMemo(() => {
     if (!effectiveTrackId) return null;
     return tracks.find((track) => track.id === effectiveTrackId) ?? null;
   }, [tracks, effectiveTrackId]);
-  
+
   const queueTracks = useMemo(
     () =>
       queueTrackIds
@@ -1215,12 +1231,12 @@ export default function App() {
         .filter((track): track is TrackMeta => track !== null),
     [queueTrackIds, tracks]
   );
-  
+
   const currentIndex = useMemo(() => {
     if (!effectiveTrackId) return -1;
     return tracks.findIndex((track) => track.id === effectiveTrackId);
   }, [tracks, effectiveTrackId]);
-  
+
   const canGoPrev =
     tracks.length > 0 &&
     (playback.currentTime > 3 ||
@@ -1233,28 +1249,28 @@ export default function App() {
       (shuffleEnabled
         ? trackIds.length > 1 || repeatMode === "all"
         : currentIndex < tracks.length - 1 || repeatMode !== "off"));
-  
+
   const handleTogglePlay = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine) return;
-  
+
     if (playback.isPlaying) {
       engine.pause();
       return;
     }
-  
+
     const targetId = effectiveTrackId ?? tracks[0]?.id;
     if (!targetId) {
       showToast("Import a track from Library first.");
       setActiveTab("library");
       return;
     }
-  
+
     if (playback.trackId === targetId && playback.isReady) {
       await engine.play();
       return;
     }
-  
+
     await playTrackById(targetId, { registerShuffleSelection: true });
   }, [
     effectiveTrackId,
@@ -1265,42 +1281,42 @@ export default function App() {
     showToast,
     tracks
   ]);
-  
+
   const handleRateChange = useCallback((nextRate: number) => {
     engineRef.current?.setRate(nextRate);
   }, []);
-  
+
   const handleSeekCommit = useCallback((targetSeconds: number) => {
     engineRef.current?.seek(targetSeconds);
   }, []);
-  
+
   const handleReverbEnabledChange = useCallback((enabled: boolean) => {
     engineRef.current?.setReverbEnabled(enabled);
   }, []);
-  
+
   const handleReverbPresetChange = useCallback(async (presetId: ReverbPresetId) => {
     const engine = engineRef.current;
     if (!engine) return;
     await engine.setReverbPreset(presetId);
   }, []);
-  
+
   const handleReverbWetChange = useCallback((wet: number) => {
     engineRef.current?.setReverbWet(wet);
   }, []);
-  
+
   const handleNextReverbPreset = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine) return;
-  
+
     const index = REVERB_PRESETS.findIndex((preset) => preset.id === playback.reverbPresetId);
     const nextIndex = index >= 0 ? (index + 1) % REVERB_PRESETS.length : 0;
     await engine.setReverbPreset(REVERB_PRESETS[nextIndex].id);
   }, [playback.reverbPresetId]);
-  
+
   const handleEqEnabledChange = useCallback((enabled: boolean) => {
     engineRef.current?.setEqEnabled(enabled);
   }, []);
-  
+
   const handleEqBandConfigChange = useCallback(
     (
       bandId: string,
@@ -1311,7 +1327,7 @@ export default function App() {
     },
     []
   );
-  
+
   const handleEqResetFlat = useCallback(() => {
     if (isEqCustomSlotName(eqCurveSelection)) {
       const flatBands = createDefaultEqBands();
@@ -1327,74 +1343,74 @@ export default function App() {
     engineRef.current?.setEqPreset("Flat");
     setEqCurveSelection("Flat");
   }, [eqCurveSelection]);
-  
+
   const handleEqCurveSelectionChange = useCallback(
     (selection: EqCurveSelection) => {
       const engine = engineRef.current;
       if (!engine) return;
-  
+
       setEqCurveSelection(selection);
       if (isEqPresetName(selection)) {
         engine.setEqPreset(selection);
         return;
       }
-  
+
       const slotIndex = EQ_CUSTOM_SLOT_NAMES.indexOf(selection);
       const slotBands = eqCustomSlots[slotIndex] ?? createDefaultEqBands();
       engine.setEqBands(slotBands, null);
     },
     [eqCustomSlots]
   );
-  
+
   const handleWaveformEnabledChange = useCallback((enabled: boolean) => {
     setWaveformEnabled(enabled);
   }, []);
-  
+
   const handleWaveformModeChange = useCallback((mode: WaveformMode) => {
     setWaveformMode(mode);
   }, []);
-  
+
   const handleWaveformTargetFpsChange = useCallback((nextFps: number) => {
     setWaveformTargetFps(clamp(Math.round(nextFps), 24, 120));
   }, []);
-  
+
   const handleWaveformColorChange = useCallback((nextColor: string) => {
     setWaveformColor(sanitizeWaveformColor(nextColor));
   }, []);
-  
+
   const handleBackgroundMotionEnabledChange = useCallback((enabled: boolean) => {
     setBackgroundMotionEnabled(enabled);
   }, []);
-  
+
   const handleBackgroundBassReactiveEnabledChange = useCallback((enabled: boolean) => {
     setBackgroundBassReactiveEnabled(enabled);
   }, []);
-  
+
   const handleBackgroundBassReactionChange = useCallback((next: number) => {
     setBackgroundBassReaction(clamp(next, 0, 3));
   }, []);
-  
+
   const handleBgBassLowChange = useCallback((v: number) => {
     setBgBassLow(clamp(Math.round(v), 20, 400));
   }, []);
-  
+
   const handleBgBassHighChange = useCallback((v: number) => {
     setBgBassHigh(clamp(Math.round(v), 60, 800));
   }, []);
-  
+
   const handleBgBassThresholdChange = useCallback((v: number) => {
     setBgBassThreshold(clamp(v, 0.005, 0.2));
   }, []);
-  
+
   const handleDarkLockActiveChange = useCallback((active: boolean) => {
     setDarkLockActive(active);
   }, []);
-  
+
   const handleAppearanceThemeChange = useCallback((themeId: string) => {
     if (!Object.prototype.hasOwnProperty.call(APPEARANCE_THEMES, themeId)) return;
     setAppearanceThemeId(themeId as AppearanceThemeId);
   }, []);
-  
+
   const getWaveformAnalysers = useCallback((): WaveformAnalyserNodes => {
     return (
       engineRef.current?.getWaveformAnalyserNodes() ?? {
@@ -1404,15 +1420,15 @@ export default function App() {
       }
     );
   }, []);
-  
+
   const getEqGraphCurve = useCallback(() => {
     return engineRef.current?.getEqGraphCurve() ?? null;
   }, []);
-  
+
   const handleToggleShuffle = useCallback(() => {
     const nextEnabled = !shuffleEnabled;
     setShuffleEnabled(nextEnabled);
-  
+
     if (nextEnabled) {
       seedShuffleState(effectiveTrackId);
     } else {
@@ -1421,7 +1437,7 @@ export default function App() {
       shufflePoolRef.current = [];
     }
   }, [effectiveTrackId, seedShuffleState, shuffleEnabled]);
-  
+
   const handleCycleRepeatMode = useCallback(() => {
     setRepeatMode((previous) => {
       if (previous === "off") return "one";
@@ -1429,25 +1445,25 @@ export default function App() {
       return "off";
     });
   }, []);
-  
+
   const handlePrev = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine || tracks.length === 0) return;
-  
+
     if (playback.currentTime > 3 && playback.isReady) {
       engine.seek(0);
       return;
     }
-  
+
     const currentId = effectiveTrackId;
     if (!currentId) return;
-  
+
     const prevId = shuffleEnabled
       ? getShufflePrevTrackId(currentId)
       : getSequentialPrevTrackId(currentId);
-  
+
     if (!prevId) return;
-  
+
     await playTrackById(prevId, { registerShuffleSelection: false });
   }, [
     effectiveTrackId,
@@ -1459,24 +1475,24 @@ export default function App() {
     shuffleEnabled,
     tracks.length
   ]);
-  
+
   const handleNext = useCallback(async () => {
     if (tracks.length === 0) return;
-  
+
     const queuedNextId = dequeueNextQueuedTrackId();
     if (queuedNextId) {
       await playTrackById(queuedNextId, { registerShuffleSelection: true });
       return;
     }
-  
+
     const currentId = effectiveTrackId ?? tracks[0].id;
-  
+
     const nextId = shuffleEnabled
       ? getShuffleNextTrackId(currentId)
       : getSequentialNextTrackId(currentId);
-  
+
     if (!nextId) return;
-  
+
     await playTrackById(nextId, { registerShuffleSelection: false });
   }, [
     dequeueNextQueuedTrackId,
@@ -1487,13 +1503,13 @@ export default function App() {
     shuffleEnabled,
     tracks
   ]);
-  
+
   const handleImportFiles = useCallback(
     async (fileList: FileList | null) => {
       if (!fileList || fileList.length === 0) return;
-  
+
       setIsImporting(true);
-  
+
       for (const file of Array.from(fileList)) {
         if (!isSupportedAudioFileName(file.name)) {
           showToast(
@@ -1501,7 +1517,7 @@ export default function App() {
           );
           continue;
         }
-  
+
         let durationSeconds = 0;
         try {
           durationSeconds = await probeDurationFromFile(file);
@@ -1509,7 +1525,7 @@ export default function App() {
           durationSeconds = 0;
           showToast(`Imported "${file.name}" with unknown duration.`);
         }
-  
+
         const track: TrackMeta = {
           id: createTrackId(),
           filename: file.name,
@@ -1519,37 +1535,37 @@ export default function App() {
           mimeType: file.type || getMimeFromFileName(file.name),
           sizeBytes: file.size
         };
-  
+
         try {
           await putTrack(track, file);
         } catch {
           showToast(`Failed to import "${file.name}".`);
         }
       }
-  
+
       setIsImporting(false);
       await refreshLibrary();
     },
     [refreshLibrary, showToast]
   );
-  
+
   const handleDeleteTrack = useCallback(
     async (trackId: string) => {
       const engine = engineRef.current;
       if (engine) {
         engine.clearTrack(trackId);
       }
-  
+
       if (queueRef.current.includes(trackId)) {
         setQueue(queueRef.current.filter((id) => id !== trackId));
       }
-  
+
       await deleteTrackById(trackId);
       await refreshLibrary();
     },
     [refreshLibrary, setQueue]
   );
-  
+
   return (
     <div className="app-root" ref={appRootRef} style={appStyle}>
       {backgroundMotionEnabled && (
@@ -1564,7 +1580,7 @@ export default function App() {
         <p className="app-kicker">Audio Lab</p>
         <h1>Slowed HQ</h1>
       </header>
-  
+
       <main className="app-main">
         {activeTab === "library" ? (
           <LibraryScreen
@@ -1641,7 +1657,7 @@ export default function App() {
           />
         )}
       </main>
-  
+
       <nav className="tabbar">
         <button
           type="button"
@@ -1650,7 +1666,7 @@ export default function App() {
         >
           Player
         </button>
-  
+
         <button
           type="button"
           className={`tabbar-button ${activeTab === "library" ? "is-active" : ""}`}
@@ -1659,7 +1675,7 @@ export default function App() {
           Library
         </button>
       </nav>
-  
+
       {darkLockActive ? (
         <div className="dark-lock-overlay" role="dialog" aria-label="Dark lock screen">
           {darkLockHintVisible ? (
@@ -1677,7 +1693,7 @@ export default function App() {
           </button>
         </div>
       ) : null}
-  
+
       <Toast message={toastMessage} />
     </div>
   );

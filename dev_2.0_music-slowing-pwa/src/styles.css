@@ -215,23 +215,30 @@ button {
   }
 }
 
-/* ─── aurora background (GPU CSS orbs – zero CPU) ─── */
+/* ─── aurora background (GPU CSS orbs – bass-reactive) ─── */
 .aurora-bg {
   position: absolute;
-  inset: 0;
+  inset: -20%;
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
   border-radius: inherit;
+  /* Bass reactive: shift the entire aurora container and blur */
+  transform: translate(var(--bg-flow-shift-x, 0%),
+      var(--bg-flow-shift-y, 0%));
+  /* Sharpen on bass hits: blur reduces from 55 → 30 at full pulse */
+  filter: blur(calc(55px - 25px * var(--bg-pulse, 0)));
+  transition: filter 0.12s ease-out;
 }
 
 .aurora-bg::after {
-  /* Subtle dark overlay so UI text stays readable */
+  /* Dark overlay dims on bass hits for brighter punchthrough */
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(4, 8, 18, 0.45);
+  background: rgba(4, 8, 18, calc(0.45 - 0.15 * var(--bg-pulse, 0)));
   z-index: 1;
+  transition: background 0.15s ease-out;
 }
 
 
@@ -241,7 +248,11 @@ button {
   position: absolute;
   border-radius: 50%;
   mix-blend-mode: screen;
-  will-change: transform;
+  will-change: transform, opacity;
+  /* Bass reactive: all orbs scale up with energy */
+  --bass-scale: calc(1 + 0.15 * var(--bg-energy, 0));
+  scale: var(--bass-scale);
+  transition: opacity 0.15s ease-out, scale 0.18s ease-out;
 }
 
 /* Orb 1 – large, accent, floats top-left → bottom-right */
@@ -254,7 +265,7 @@ button {
       var(--accent) 0%,
       color-mix(in srgb, var(--accent) 40%, transparent) 50%,
       transparent 75%);
-  opacity: 0.9;
+  opacity: calc(0.75 + 0.25 * var(--bg-pulse, 0));
   animation: auroraOrb1 7s ease-in-out infinite alternate;
 }
 
@@ -268,7 +279,7 @@ button {
       var(--accent-2) 0%,
       color-mix(in srgb, var(--accent-2) 35%, transparent) 50%,
       transparent 75%);
-  opacity: 0.85;
+  opacity: calc(0.65 + 0.35 * var(--bg-pulse, 0));
   animation: auroraOrb2 11s ease-in-out infinite alternate;
 }
 
@@ -282,7 +293,7 @@ button {
       color-mix(in srgb, var(--accent) 55%, var(--accent-2)) 0%,
       color-mix(in srgb, var(--accent) 25%, transparent) 55%,
       transparent 78%);
-  opacity: 0.75;
+  opacity: calc(0.55 + 0.45 * var(--bg-pulse, 0));
   animation: auroraOrb3 9s ease-in-out infinite alternate;
 }
 
@@ -296,7 +307,7 @@ button {
       color-mix(in srgb, var(--accent-2) 60%, var(--accent)) 0%,
       color-mix(in srgb, var(--accent-2) 20%, transparent) 55%,
       transparent 80%);
-  opacity: 0.65;
+  opacity: calc(0.45 + 0.55 * var(--bg-pulse, 0));
   animation: auroraOrb4 14s ease-in-out infinite alternate;
 }
 
@@ -1223,14 +1234,14 @@ input[type="range"]:disabled::-webkit-slider-thumb {
     linear-gradient(180deg, rgba(10, 16, 28, 0.78), rgba(6, 10, 20, 0.75));
   box-shadow: var(--shadow-lg), 0 0 0 0.5px rgba(0, 0, 0, 0.40);
   backdrop-filter: var(--glass-blur-heavy);
-  padding: 6px 16px calc(80px + env(safe-area-inset-bottom));
-  max-height: min(90vh, calc(100dvh - env(safe-area-inset-top) - 12px));
+  padding: 6px 16px calc(120px + env(safe-area-inset-bottom));
+  max-height: min(94vh, calc(100dvh - env(safe-area-inset-top) - 8px));
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   scroll-padding-top: 74px;
-  scroll-padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(120px + env(safe-area-inset-bottom));
   touch-action: pan-y;
   -webkit-touch-callout: none;
   min-height: 0;
