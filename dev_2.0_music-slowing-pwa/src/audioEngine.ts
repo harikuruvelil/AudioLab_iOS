@@ -97,6 +97,8 @@ export class TapeAudioEngine {
   private peakMeterSink: GainNode | null = null;
   private eqFilters: BiquadFilterNode[] = [];
   private bassSpectrumData: Uint8Array<ArrayBuffer> | null = null;
+  private bassTimeDomainData: Uint8Array<ArrayBuffer> | null = null;
+  private bassEnvelope = 0;
 
   private trackId: string | null = null;
   private duration = 0;
@@ -201,41 +203,107 @@ export class TapeAudioEngine {
   }
 
   getBassReactiveLevel(lowHz = 70, highHz = 300): number {
-    if (!this.context || !this.analyser || !this.isPlaying) return 0;
+    if (!this.context || !this.analyser || !this.isPlaying) {
+      this.bassEnvelope *= 0.84;
+      if (this.bassEnvelope < 0.001) {
+        this.bassEnvelope = 0;
+      }
+      return this.bassEnvelope;
+    }
 
     const analyser = this.analyser;
     const binCount = analyser.frequencyBinCount;
     if (!this.bassSpectrumData || this.bassSpectrumData.length !== binCount) {
       this.bassSpectrumData = new Uint8Array(new ArrayBuffer(binCount));
     }
-
-    analyser.getByteFrequencyData(this.bassSpectrumData);
-
-    const nyquist = this.context.sampleRate * 0.5;
-    const low = clamp(Math.floor((lowHz / nyquist) * binCount), 0, binCount - 1);
-    const high = clamp(Math.ceil((highHz / nyquist) * binCount), low + 1, binCount);
-
-    let sum = 0;
-    let count = 0;
-    for (let i = low; i < high; i += 1) {
-      sum += this.bassSpectrumData[i];
-      count += 1;
+    const timeDomainCount = analyser.fftSize;
+    if (!this.bassTimeDomainData || this.bassTimeDomainData.length !== timeDomainCount) {
+      this.bassTimeDomainData = new Uint8Array(new ArrayBuffer(timeDomainCount));
     }
 
-    if (count === 0) return 0;
-    return clamp(sum / (count * 255), 0, 1);
+    analyser.getByteFrequencyData(this.bassSpectrumData);
+    analyser.getByteTimeDomainData(this.bassTimeDomainData);
+
+    const nyquist = this.context.sampleRate * 0.5;
+    const safeLowHz = Math.max(12, Math.min(lowHz, highHz - 1));
+    const safeHighHz = Math.max(safeLowHz + 1, highHz);
+
+    const low = clamp(Math.floor((safeLowHz / nyquist) * binCount), 0, binCount - 1);
+    const high = clamp(Math.ceil((safeHighHz / nyquist) * binCount), low + 1, binCount);
+
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (let i = low; i < high; i += 1) {
+      const normalizedIndex = (i - low) / Math.max(1, high - low - 1);
+      const weight = 1.35 - normalizedIndex * 0.65;
+      weightedSum += (this.bassSpectrumData[i] / 255) * weight;
+      weightTotal += weight;
+    }
+    const weightedAverage = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+    const subHighHz = Math.min(safeHighHz, Math.max(safeLowHz + 1, 120));
+    const subHigh = clamp(Math.ceil((subHighHz / nyquist) * binCount), low + 1, high);
+    let subSum = 0;
+    let subCount = 0;
+    for (let i = low; i < subHigh; i += 1) {
+      subSum += this.bassSpectrumData[i] / 255;
+      subCount += 1;
+    }
+    const subAverage = subCount > 0 ? subSum / subCount : weightedAverage;
+
+    let rmsAccumulator = 0;
+    let rmsCount = 0;
+    for (let i = 0; i < this.bassTimeDomainData.length; i += 2) {
+      const centered = (this.bassTimeDomainData[i] - 128) / 128;
+      rmsAccumulator += centered * centered;
+      rmsCount += 1;
+    }
+    const rms = rmsCount > 0 ? Math.sqrt(rmsAccumulator / rmsCount) : 0;
+    const transient = clamp((rms - 0.015) * 8.5, 0, 1);
+
+    const combined = clamp(
+      weightedAverage * 0.58 + subAverage * 0.27 + transient * 0.35,
+      0,
+      1
+    );
+    const attack = combined > this.bassEnvelope ? 0.44 : 0.17;
+    this.bassEnvelope += (combined - this.bassEnvelope) * attack;
+    return clamp(this.bassEnvelope, 0, 1);
   }
 
   async ensureContext(): Promise<void> {
-    if (!this.context) {
+    const shouldRecreateContext = !this.context || this.context.state === "closed";
+    if (shouldRecreateContext) {
+      const wasPlaying = this.isPlaying;
+      this.stopSource();
+      this.stopTicker();
+      this.resetProcessingGraphState();
       this.context = new AudioContext();
       this.setupProcessingGraph(this.context);
+      this.anchorContextTime = this.context.currentTime;
+
+      if (wasPlaying) {
+        this.isPlaying = false;
+        this.anchorMediaTime = clamp(this.anchorMediaTime, 0, this.duration);
+        this.emitState();
+      }
+    } else if (this.isPlaying && !this.source) {
+      this.isPlaying = false;
+      this.stopTicker();
+      if (this.context) {
+        this.anchorContextTime = this.context.currentTime;
+      }
+      this.anchorMediaTime = clamp(this.anchorMediaTime, 0, this.duration);
+      this.emitState();
     }
+
+    const ctx = this.context;
+    if (!ctx) return;
 
     await this.setupMonitoringGraph();
 
-    if (this.context.state === "suspended") {
-      await this.context.resume();
+    if (ctx.state !== "running") {
+      await ctx.resume();
     }
 
     this.applyEqCurve();
@@ -333,6 +401,7 @@ export class TapeAudioEngine {
     this.anchorMediaTime = this.currentMediaTime();
     this.anchorContextTime = this.context.currentTime;
     this.isPlaying = false;
+    this.bassEnvelope = 0;
     this.stopSource();
     this.stopTicker();
     this.emitState();
@@ -344,6 +413,7 @@ export class TapeAudioEngine {
     }
     this.anchorMediaTime = 0;
     this.isPlaying = false;
+    this.bassEnvelope = 0;
     this.stopSource();
     this.stopTicker();
     this.emitState();
@@ -599,6 +669,7 @@ export class TapeAudioEngine {
     this.duration = 0;
     this.anchorMediaTime = 0;
     this.trackLoading = false;
+    this.bassEnvelope = 0;
     this.setClipWarning(false);
     this.emitState();
   }
@@ -609,6 +680,25 @@ export class TapeAudioEngine {
     this.clearClipHoldTimer();
     this.setClipWarning(false);
     this.buffer = null;
+    this.resetProcessingGraphState();
+
+    this.workletSetupPromise = null;
+    this.peakMeterDisabled = false;
+    this.trackLoading = false;
+    this.irLoading = false;
+    this.bassSpectrumData = null;
+    this.bassTimeDomainData = null;
+    this.bassEnvelope = 0;
+    this.quality = createDefaultQualityState();
+
+    if (this.context && this.context.state !== "closed") {
+      await this.context.close();
+    }
+
+    this.context = null;
+  }
+
+  private resetProcessingGraphState(): void {
     this.eqFilters = [];
     this.splitGain = null;
     this.dryGain = null;
@@ -631,17 +721,9 @@ export class TapeAudioEngine {
     }
 
     this.workletSetupPromise = null;
-    this.peakMeterDisabled = false;
-    this.trackLoading = false;
-    this.irLoading = false;
     this.bassSpectrumData = null;
-    this.quality = createDefaultQualityState();
-
-    if (this.context && this.context.state !== "closed") {
-      await this.context.close();
-    }
-
-    this.context = null;
+    this.bassTimeDomainData = null;
+    this.bassEnvelope = 0;
   }
 
   private setupProcessingGraph(ctx: AudioContext): void {

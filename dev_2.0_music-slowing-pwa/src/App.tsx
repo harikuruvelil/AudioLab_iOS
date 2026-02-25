@@ -360,6 +360,18 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
     typeof value.backgroundBassReaction === "number"
       ? clamp(value.backgroundBassReaction, 0, 3)
       : 1;
+  const bgBassLow =
+    typeof value.bgBassLow === "number"
+      ? clamp(Math.round(value.bgBassLow), 20, 400)
+      : 40;
+  const bgBassHigh =
+    typeof value.bgBassHigh === "number"
+      ? clamp(Math.round(value.bgBassHigh), 60, 800)
+      : 280;
+  const bgBassThreshold =
+    typeof value.bgBassThreshold === "number"
+      ? clamp(value.bgBassThreshold, 0.005, 0.2)
+      : 0.02;
 
   return {
     rate,
@@ -378,7 +390,10 @@ function parsePersistedSettings(raw: unknown): PersistedAudioSettings | null {
     waveformColor,
     backgroundMotionEnabled,
     backgroundBassReactiveEnabled,
-    backgroundBassReaction
+    backgroundBassReaction,
+    bgBassLow,
+    bgBassHigh,
+    bgBassThreshold
   };
 }
 
@@ -499,6 +514,10 @@ export default function App() {
   const bgBassFloorRef = useRef(0.02);
   const bgBassPeakRef = useRef(0.16);
   const bgPulseRef = useRef(0);
+  const bgLastRawBassRef = useRef(0);
+  const playbackLifecycleRef = useRef({ isPlaying: false, isReady: false });
+  const resumeOnForegroundRef = useRef(false);
+  const lifecycleRecoveryInFlightRef = useRef(false);
 
   // Shuffle queue state that persists while app is running.
   const shuffleHistoryRef = useRef<string[]>([]);
@@ -1048,6 +1067,13 @@ export default function App() {
   const appearanceTheme = APPEARANCE_THEMES[appearanceThemeId];
 
   useEffect(() => {
+    playbackLifecycleRef.current = {
+      isPlaying: playback.isPlaying,
+      isReady: playback.isReady
+    };
+  }, [playback.isPlaying, playback.isReady]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const root = appRootRef.current;
     if (!root) return;
@@ -1058,6 +1084,7 @@ export default function App() {
       bgBassFloorRef.current = 0.02;
       bgBassPeakRef.current = 0.16;
       bgPulseRef.current = 0;
+      bgLastRawBassRef.current = 0;
       root.style.setProperty("--bg-energy", "0");
       root.style.setProperty("--bg-pulse", "0");
       root.style.setProperty("--bg-flow-shift-x", "0%");
@@ -1104,17 +1131,29 @@ export default function App() {
         lastBassSampleTimestamp = now;
         if (backgroundBassReactiveEnabled) {
           const rawBass = engineRef.current?.getBassReactiveLevel(bgBassLow, bgBassHigh) ?? 0;
-          const floor = (bgBassFloorRef.current = bgBassFloorRef.current * 0.992 + rawBass * 0.008);
-          const peak = (bgBassPeakRef.current = Math.max(rawBass, bgBassPeakRef.current * 0.985));
-          const normalized = clamp((rawBass - floor) / Math.max(bgBassThreshold, peak - floor), 0, 1);
-          const punch = Math.pow(normalized, 0.28);
-          // Enhanced: wider range, more dramatic scaling for true bass feel
-          targetEnergy = clamp(punch * (0.7 + reactionStrength * 3.2), 0, 2.0);
-          // Pulse is a fast-decaying signal for glow bursts
-          bgPulseRef.current = Math.max(bgPulseRef.current * 0.88, punch * (0.5 + reactionStrength * 1.2));
+          const floor = (bgBassFloorRef.current = bgBassFloorRef.current * 0.989 + rawBass * 0.011);
+          const peak = (bgBassPeakRef.current = Math.max(rawBass, bgBassPeakRef.current * 0.974));
+          const span = Math.max(bgBassThreshold * 0.7, peak - floor);
+          const normalized = clamp((rawBass - floor) / span, 0, 1);
+          const rawDelta = Math.max(0, rawBass - bgLastRawBassRef.current);
+          const transient = clamp(rawDelta * (8 + reactionStrength * 1.8), 0, 1);
+          const punch = clamp(Math.pow(normalized, 0.56) * 0.72 + transient * 0.58, 0, 1);
+
+          targetEnergy = clamp(
+            rawBass * (0.5 + reactionStrength * 0.28) +
+            punch * (0.42 + reactionStrength * 1.36),
+            0,
+            2.25
+          );
+          bgPulseRef.current = Math.max(
+            bgPulseRef.current * 0.80,
+            punch * (0.62 + reactionStrength * 0.96)
+          );
+          bgLastRawBassRef.current = rawBass;
         } else {
           targetEnergy = 0;
           bgPulseRef.current *= 0.92;
+          bgLastRawBassRef.current = 0;
         }
       }
 
@@ -1163,26 +1202,82 @@ export default function App() {
     bgBassThreshold,
     playback.isPlaying
   ]);
-
-  // ─── PWA resume: iOS suspends AudioContext when app backgrounds ───
+  // PWA resume lifecycle: iOS can suspend/close audio when app backgrounds.
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        const engine = engineRef.current;
-        if (engine) {
-          // The engine's ensureContext() already checks for suspended state
-          // and calls context.resume(). We invoke it on any user-gesture-
-          // adjacent event (visibility change counts on iOS).
-          engine.ensureContext().catch(() => {
-            // Silently swallow — the context will resume on next play tap
-          });
+    if (typeof window === "undefined") return;
+
+    let disposed = false;
+
+    const armForegroundResume = () => {
+      const snapshot = playbackLifecycleRef.current;
+      resumeOnForegroundRef.current = snapshot.isPlaying && snapshot.isReady;
+    };
+
+    const attemptAudioRecovery = async () => {
+      if (disposed || lifecycleRecoveryInFlightRef.current) return;
+      const engine = engineRef.current;
+      if (!engine) return;
+
+      lifecycleRecoveryInFlightRef.current = true;
+      const shouldResumePlayback = resumeOnForegroundRef.current;
+
+      try {
+        await engine.ensureContext();
+        if (shouldResumePlayback) {
+          await engine.play();
+          resumeOnForegroundRef.current = false;
         }
+      } catch {
+        // iOS may reject resume until a touch/pointer event.
+      } finally {
+        lifecycleRecoveryInFlightRef.current = false;
       }
     };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        armForegroundResume();
+        return;
+      }
+      void attemptAudioRecovery();
+    };
+
+    const handlePageHide = () => {
+      armForegroundResume();
+    };
+
+    const handlePageShow = () => {
+      void attemptAudioRecovery();
+    };
+
+    const handleWindowFocus = () => {
+      if (document.visibilityState === "visible") {
+        void attemptAudioRecovery();
+      }
+    };
+
+    const handleUserGesture = () => {
+      if (!resumeOnForegroundRef.current || document.visibilityState !== "visible") return;
+      void attemptAudioRecovery();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("pointerdown", handleUserGesture, { passive: true });
+    window.addEventListener("touchstart", handleUserGesture, { passive: true });
+
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("pointerdown", handleUserGesture);
+      window.removeEventListener("touchstart", handleUserGesture);
+    };
+  }, []);
   useEffect(() => {
     if (!darkLockActive) {
       setDarkLockHintVisible(false);
