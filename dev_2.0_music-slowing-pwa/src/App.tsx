@@ -1116,9 +1116,17 @@ export default function App() {
     let phase = bgPhaseRef.current;
     let lastFrameTimestamp = 0;
     let lastBassSampleTimestamp = 0;
+    const coarsePointer =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
     const heavyVisualMode = activeTab === "player" && playback.isPlaying;
-    const frameIntervalMs = heavyVisualMode ? 1000 / 30 : 1000 / 18;
-    const bassSampleIntervalMs = heavyVisualMode ? 1000 / 24 : 1000 / 14;
+    const frameIntervalMs = heavyVisualMode
+      ? (coarsePointer ? 1000 / 18 : 1000 / 24)
+      : (coarsePointer ? 1000 / 8 : 1000 / 12);
+    const bassSampleIntervalMs = heavyVisualMode
+      ? (coarsePointer ? 1000 / 14 : 1000 / 18)
+      : (coarsePointer ? 1000 / 7 : 1000 / 10);
     const reactionStrength = clamp(backgroundBassReaction, 0, 3);
 
     const tick = (now: number) => {
@@ -1213,17 +1221,17 @@ export default function App() {
         baseMotion +
         (backgroundBassReactiveEnabled
           ? heavyVisualMode
-            ? smoothed * (0.95 + reactionStrength * 0.40)
-            : smoothed * (0.62 + reactionStrength * 0.26)
+            ? smoothed * (0.78 + reactionStrength * 0.30)
+            : smoothed * (0.46 + reactionStrength * 0.18)
           : 0),
         0,
-        2.2
+        1.85
       );
-      const shiftX = Math.sin(phase) * (2.0 + visualEnergy * (7.5 + reactionStrength * 2.2));
-      const shiftY = Math.cos(phase * 0.83) * (1.5 + visualEnergy * (6.5 + reactionStrength * 1.8));
-      const angleOffset = Math.sin(phase * 0.57) * (2.8 + visualEnergy * (7.0 + reactionStrength * 2.0));
+      const shiftX = Math.sin(phase) * (1.2 + visualEnergy * (4.2 + reactionStrength * 1.2));
+      const shiftY = Math.cos(phase * 0.83) * (0.9 + visualEnergy * (3.6 + reactionStrength * 1.0));
+      const angleOffset = Math.sin(phase * 0.57) * (1.5 + visualEnergy * (3.1 + reactionStrength * 0.8));
       const pulse = clamp(bgPulseRef.current, 0, 1);
-      const flowDistort = clamp((visualEnergy * 0.48 + pulse * 0.72) / 1.6, 0, 1.35);
+      const flowDistort = clamp((visualEnergy * 0.42 + pulse * 0.58) / 1.4, 0, 1.1);
 
       root.style.setProperty("--bg-energy", visualEnergy.toFixed(4));
       root.style.setProperty("--bg-pulse", pulse.toFixed(4));
