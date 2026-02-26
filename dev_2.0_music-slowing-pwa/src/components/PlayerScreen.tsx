@@ -207,6 +207,7 @@ export function PlayerScreen({
   const [selectedEqBandId, setSelectedEqBandId] = useState<string | null>(null);
 
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const reflectionCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const eqGraphCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const monoBytesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const leftBytesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
@@ -386,9 +387,9 @@ export function PlayerScreen({
         ? Math.min(window.devicePixelRatio || 1, 1.35)
         : Math.min(window.devicePixelRatio || 1, 2);
     const rgb = hexToRgb(waveformColor);
-    const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.92)`;
-    const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.85)`;
-    const lineColorSoft = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.25)`;
+    const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.95)`;
+    const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.88)`;
+    const lineColorSoft = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.20)`;
     const lineColorGlow = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
     let frameWidth = 1;
     let frameHeight = 1;
@@ -404,28 +405,49 @@ export function PlayerScreen({
       frameHeight = height;
     };
 
+    const drawGrid = (width: number, height: number) => {
+      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.04)`;
+      context2d.lineWidth = Math.max(0.5, dpr * 0.4);
+      const gridLines = [0.25, 0.5, 0.75];
+      for (const frac of gridLines) {
+        const gy = height * frac;
+        context2d.beginPath();
+        context2d.moveTo(0, gy);
+        context2d.lineTo(width, gy);
+        context2d.stroke();
+      }
+      // center line accent
+      context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`;
+      context2d.lineWidth = Math.max(0.8, dpr * 0.6);
+      context2d.beginPath();
+      context2d.moveTo(0, height * 0.5);
+      context2d.lineTo(width, height * 0.5);
+      context2d.stroke();
+    };
+
     const drawIdle = () => {
       resizeCanvas();
       const width = frameWidth;
       const height = frameHeight;
-      context2d.fillStyle = "rgba(8, 12, 22, 0.95)";
+      context2d.fillStyle = "rgba(3, 6, 14, 0.97)";
       context2d.fillRect(0, 0, width, height);
+      drawGrid(width, height);
 
       const y = height / 2;
       context2d.beginPath();
       context2d.moveTo(0, y);
       context2d.lineTo(width, y);
       context2d.strokeStyle = lineColorSoft;
-      context2d.lineWidth = Math.max(1.1, dpr);
+      context2d.lineWidth = Math.max(1.2, dpr);
       context2d.stroke();
 
       if (glowEnabled) {
-        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.15)`;
-        context2d.shadowBlur = 12 * dpr;
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
+        context2d.shadowBlur = 14 * dpr;
         context2d.beginPath();
         context2d.moveTo(0, y);
         context2d.lineTo(width, y);
-        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`;
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.10)`;
         context2d.stroke();
         context2d.shadowBlur = 0;
       }
@@ -441,7 +463,8 @@ export function PlayerScreen({
 
       const width = frameWidth;
       const height = frameHeight;
-      // Use a lighter point budget in ultra-refresh mode to keep UI smooth.
+      drawGrid(width, height);
+
       const maxPoints = isMobile
         ? ultraRefreshMode
           ? Math.max(140, Math.min(220, Math.floor(width / Math.max(1.9, dpr * 1.9))))
@@ -449,10 +472,18 @@ export function PlayerScreen({
         : ultraRefreshMode
           ? Math.max(280, Math.min(760, Math.floor(width / Math.max(1.1, dpr))))
           : highRefreshMode
-          ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
-          : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
+            ? Math.max(320, Math.min(920, Math.floor(width / Math.max(0.9, dpr * 0.9))))
+            : Math.max(600, Math.min(2048, Math.floor(width / Math.max(0.4, dpr * 0.45))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
       const totalPoints = Math.max(2, Math.floor(waveform.length / stride));
+
+      // Compute average amplitude for reactive glow
+      let ampSum = 0;
+      for (let i = 0; i < waveform.length; i += stride) {
+        ampSum += Math.abs(waveform[i] - 128);
+      }
+      const avgAmp = ampSum / Math.max(1, Math.floor(waveform.length / stride)) / 128;
+      const reactiveGlow = Math.min(1, avgAmp * 3);
 
       context2d.beginPath();
       const getY = (idx: number) => {
@@ -489,16 +520,59 @@ export function PlayerScreen({
         }
       }
 
+      // ─── Gradient fill beneath line ───
+      if (!ultraRefreshMode) {
+        context2d.save();
+        context2d.lineTo(width, height);
+        context2d.lineTo(0, height);
+        context2d.closePath();
+        const fillAlpha = Math.max(0.04, 0.12 * reactiveGlow);
+        const grad = context2d.createLinearGradient(0, height * 0.3, 0, height);
+        grad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${fillAlpha})`);
+        grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+        context2d.fillStyle = grad;
+        context2d.fill();
+        context2d.restore();
+      }
+
+      // Re-build the line path for stroking
+      context2d.beginPath();
+      if (ultraRefreshMode) {
+        for (let i = 0; i < totalPoints; i++) {
+          const x = (i / (totalPoints - 1)) * width;
+          const y = getY(i);
+          if (i === 0) context2d.moveTo(x, y); else context2d.lineTo(x, y);
+        }
+      } else {
+        for (let i = 0; i < totalPoints; i++) {
+          const x = (i / (totalPoints - 1)) * width;
+          const y = getY(i);
+          if (i === 0) {
+            context2d.moveTo(x, y);
+          } else if (i < totalPoints - 1) {
+            const prevX = ((i - 1) / (totalPoints - 1)) * width;
+            const prevY = getY(i - 1);
+            const cpx = (prevX + x) / 2;
+            const cpy = (prevY + y) / 2;
+            context2d.quadraticCurveTo(prevX, prevY, cpx, cpy);
+          } else {
+            context2d.lineTo(x, y);
+          }
+        }
+      }
+
       if (glowEnabled && !highRefreshMode) {
-        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.55)`;
-        context2d.shadowBlur = 22 * dpr;
+        const glowIntensity = 0.35 + reactiveGlow * 0.35;
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${glowIntensity})`;
+        context2d.shadowBlur = (16 + reactiveGlow * 12) * dpr;
         context2d.lineWidth = Math.max(3.5, dpr * 2.5);
         context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
         context2d.stroke();
       }
 
       if (glowEnabled && !ultraRefreshMode) {
-        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.70)`;
+        const outerGlow = 0.45 + reactiveGlow * 0.35;
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${outerGlow})`;
         context2d.shadowBlur = highRefreshMode ? 5 * dpr : 8 * dpr;
         context2d.lineWidth = Math.max(2.2, dpr * 1.5);
         context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.40)`;
@@ -507,7 +581,7 @@ export function PlayerScreen({
       context2d.shadowBlur = 0;
 
       // ─── Crisp foreground pass ───
-      context2d.lineWidth = Math.max(1.4, dpr);
+      context2d.lineWidth = Math.max(1.5, dpr * 1.1);
       context2d.strokeStyle = lineColorStrong;
       context2d.stroke();
     };
@@ -535,6 +609,14 @@ export function PlayerScreen({
           : Math.max(260, Math.min(760, Math.floor(width / Math.max(0.75, dpr))));
       const stride = Math.max(1, Math.floor(waveform.length / maxPoints));
 
+      // Compute average amplitude for reactive effects
+      let ampSum = 0;
+      for (let i = 0; i < waveform.length; i += stride) {
+        ampSum += Math.abs(waveform[i] - 128);
+      }
+      const avgAmp = ampSum / Math.max(1, Math.floor(waveform.length / stride)) / 128;
+      const reactiveGlow = Math.min(1, avgAmp * 3);
+
       context2d.beginPath();
       for (let i = 0; i < waveform.length; i += stride) {
         const angle = (i / waveform.length) * Math.PI * 2;
@@ -550,19 +632,106 @@ export function PlayerScreen({
       }
       context2d.closePath();
 
+      // ─── Radial gradient fill inside ring ───
+      if (!ultraRefreshMode) {
+        const fillAlpha = Math.max(0.03, 0.08 * reactiveGlow);
+        const grad = context2d.createRadialGradient(cx, cy, 0, cx, cy, baseRadius + amplitudeScale);
+        grad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${fillAlpha * 0.5})`);
+        grad.addColorStop(0.7, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${fillAlpha})`);
+        grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+        context2d.fillStyle = grad;
+        context2d.fill();
+      }
+
       if (glowEnabled && !ultraRefreshMode) {
-        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.50)`;
-        context2d.shadowBlur = highRefreshMode ? 8 * dpr : 14 * dpr;
+        const glowIntensity = 0.30 + reactiveGlow * 0.35;
+        context2d.shadowColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${glowIntensity})`;
+        context2d.shadowBlur = highRefreshMode ? 8 * dpr : (12 + reactiveGlow * 6) * dpr;
         context2d.lineWidth = Math.max(2, dpr * 1.4);
-        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.25)`;
+        context2d.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.28)`;
         context2d.stroke();
       }
       context2d.shadowBlur = 0;
 
       // Crisp foreground
-      context2d.lineWidth = Math.max(1.3, dpr);
+      context2d.lineWidth = Math.max(1.4, dpr * 1.1);
       context2d.strokeStyle = lineColorMedium;
       context2d.stroke();
+    };
+
+    // ─── Frequency Spectrum Bars ───
+    const drawBars = (analyser: AnalyserNode) => {
+      const bufLen = analyser.frequencyBinCount;
+      if (!leftBytesRef.current || leftBytesRef.current.length !== bufLen) {
+        leftBytesRef.current = createByteArray(bufLen);
+      }
+      const freqData = leftBytesRef.current;
+      analyser.getByteFrequencyData(freqData);
+
+      const width = frameWidth;
+      const height = frameHeight;
+      drawGrid(width, height);
+
+      const barCount = isMobile ? Math.min(48, Math.floor(width / 8)) : Math.min(80, Math.floor(width / 6));
+      const gap = 2 * dpr;
+      const totalGap = gap * (barCount - 1);
+      const barWidth = Math.max(2, (width - totalGap) / barCount);
+      const barRadius = Math.max(1.5, barWidth * 0.35);
+
+      // Map frequency bins to bars with log-scale weighting
+      const usableBins = Math.floor(bufLen * 0.75);
+
+      for (let i = 0; i < barCount; i++) {
+        // Log-scale frequency mapping for natural sound distribution
+        const logMin = Math.log(1);
+        const logMax = Math.log(usableBins);
+        const startBin = Math.floor(Math.exp(logMin + (logMax - logMin) * (i / barCount)));
+        const endBin = Math.floor(Math.exp(logMin + (logMax - logMin) * ((i + 1) / barCount)));
+        const actualEnd = Math.max(startBin + 1, Math.min(endBin, usableBins));
+
+        let sum = 0;
+        let count = 0;
+        for (let b = startBin; b < actualEnd; b++) {
+          sum += freqData[b];
+          count++;
+        }
+        const avg = count > 0 ? sum / count : 0;
+        const normalized = avg / 255;
+        const barHeight = Math.max(2 * dpr, normalized * height * 0.85);
+
+        const x = i * (barWidth + gap);
+        const y = height - barHeight;
+
+        // Gradient per bar — accent color to accent2
+        const barGrad = context2d.createLinearGradient(x, height, x, y);
+        const hue = (i / barCount);
+        const r1 = Math.round(rgb.r + (142 - rgb.r) * hue);
+        const g1 = Math.round(rgb.g + (174 - rgb.g) * hue);
+        const b1 = Math.round(rgb.b + (255 - rgb.b) * hue);
+        barGrad.addColorStop(0, `rgba(${r1}, ${g1}, ${b1}, 0.15)`);
+        barGrad.addColorStop(0.5, `rgba(${r1}, ${g1}, ${b1}, ${0.5 + normalized * 0.45})`);
+        barGrad.addColorStop(1, `rgba(${r1}, ${g1}, ${b1}, ${0.7 + normalized * 0.3})`);
+
+        // Draw rounded bar
+        context2d.beginPath();
+        context2d.moveTo(x, height);
+        context2d.lineTo(x, y + barRadius);
+        context2d.arcTo(x, y, x + barRadius, y, barRadius);
+        context2d.arcTo(x + barWidth, y, x + barWidth, y + barRadius, barRadius);
+        context2d.lineTo(x + barWidth, height);
+        context2d.closePath();
+
+        context2d.fillStyle = barGrad;
+        context2d.fill();
+
+        // Glow on tall bars
+        if (glowEnabled && normalized > 0.3 && !ultraRefreshMode) {
+          context2d.shadowColor = `rgba(${r1}, ${g1}, ${b1}, ${normalized * 0.5})`;
+          context2d.shadowBlur = (6 + normalized * 10) * dpr;
+          context2d.fill();
+          context2d.shadowBlur = 0;
+        }
+      }
     };
 
 
@@ -588,7 +757,7 @@ export function PlayerScreen({
       const height = frameHeight;
 
       try {
-        context2d.fillStyle = "rgba(8, 12, 22, 0.95)";
+        context2d.fillStyle = "rgba(3, 6, 14, 0.97)";
         context2d.fillRect(0, 0, width, height);
 
         analyserRefreshCounter += 1;
@@ -604,8 +773,26 @@ export function PlayerScreen({
           drawCircular(cachedAnalysers.mono);
         } else if (cachedAnalysers.mono) {
           drawLinear(cachedAnalysers.mono);
+          // Also draw bars overlay (frequency spectrum) below the waveform line
+          drawBars(cachedAnalysers.mono);
         } else {
           drawIdle();
+        }
+
+        // Copy main canvas to reflection canvas
+        const reflCanvas = reflectionCanvasRef.current;
+        if (reflCanvas) {
+          const rw = Math.max(1, Math.floor(reflCanvas.clientWidth * dpr));
+          const rh = Math.max(1, Math.floor(reflCanvas.clientHeight * dpr));
+          if (reflCanvas.width !== rw || reflCanvas.height !== rh) {
+            reflCanvas.width = rw;
+            reflCanvas.height = rh;
+          }
+          const rCtx = reflCanvas.getContext("2d");
+          if (rCtx) {
+            rCtx.clearRect(0, 0, rw, rh);
+            rCtx.drawImage(canvas, 0, 0, rw, rh);
+          }
         }
       } catch {
         drawIdle();
@@ -839,8 +1026,11 @@ export function PlayerScreen({
         </p>
       </div>
 
-      <div className="waveform-card" aria-label="Waveform display">
+      <div className={`waveform-card ${playback.isPlaying ? "waveform-card--playing" : ""}`} aria-label="Waveform display">
         <canvas className="waveform-canvas" ref={waveformCanvasRef} />
+      </div>
+      <div className="waveform-reflection" aria-hidden="true">
+        <canvas ref={reflectionCanvasRef} />
       </div>
 
       <div className="progress-rail" aria-hidden="true">
@@ -866,6 +1056,8 @@ export function PlayerScreen({
         <span>{formatDuration(displayedTime)}</span>
         <span>{formatDuration(playback.duration)}</span>
       </div>
+
+      <hr className="section-divider" />
 
       <div className="mode-row">
         <button
@@ -897,6 +1089,8 @@ export function PlayerScreen({
           ) : null}
         </button>
       </div>
+
+      <hr className="section-divider" />
 
       <div className="speed-card">
         <div className="speed-row">
@@ -958,42 +1152,44 @@ export function PlayerScreen({
         </div>
       </div>
 
-      <div className="transport-row transport-row-upgraded">
-        <button
-          type="button"
-          className="transport-button transport-circle transport-circle-side"
-          disabled={!canGoPrev}
-          onClick={() => {
-            void onPrev();
-          }}
-          aria-label="Previous track"
-        >
-          <span aria-hidden="true">{ICON_PREV}</span>
-        </button>
+      <div className="transport-wrapper">
+        <div className="transport-row transport-row-upgraded">
+          <button
+            type="button"
+            className="transport-button transport-circle transport-circle-side"
+            disabled={!canGoPrev}
+            onClick={() => {
+              void onPrev();
+            }}
+            aria-label="Previous track"
+          >
+            <span aria-hidden="true">{ICON_PREV}</span>
+          </button>
 
-        <button
-          type="button"
-          className="transport-button transport-circle transport-circle-main"
-          disabled={!currentTrack}
-          onClick={() => {
-            void onTogglePlay();
-          }}
-          aria-label={playback.isPlaying ? "Pause playback" : "Play track"}
-        >
-          <span aria-hidden="true">{playback.isPlaying ? ICON_PAUSE : ICON_PLAY}</span>
-        </button>
+          <button
+            type="button"
+            className="transport-button transport-circle transport-circle-main"
+            disabled={!currentTrack}
+            onClick={() => {
+              void onTogglePlay();
+            }}
+            aria-label={playback.isPlaying ? "Pause playback" : "Play track"}
+          >
+            <span aria-hidden="true">{playback.isPlaying ? ICON_PAUSE : ICON_PLAY}</span>
+          </button>
 
-        <button
-          type="button"
-          className="transport-button transport-circle transport-circle-side"
-          disabled={!canGoNext}
-          onClick={() => {
-            void onNext();
-          }}
-          aria-label="Next track"
-        >
-          <span aria-hidden="true">{ICON_NEXT}</span>
-        </button>
+          <button
+            type="button"
+            className="transport-button transport-circle transport-circle-side"
+            disabled={!canGoNext}
+            onClick={() => {
+              void onNext();
+            }}
+            aria-label="Next track"
+          >
+            <span aria-hidden="true">{ICON_NEXT}</span>
+          </button>
+        </div>
       </div>
 
       {isQueueOpen ? (
