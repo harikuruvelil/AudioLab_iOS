@@ -872,7 +872,7 @@ export class TapeAudioEngine {
 
     this.workletSetupPromise = (async () => {
       try {
-        await ctx.audioWorklet.addModule("/worklets/peak-meter-worklet.js");
+        await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}worklets/peak-meter-worklet.js`);
 
         if (!this.context || this.context !== ctx || !this.masterGain) return;
 

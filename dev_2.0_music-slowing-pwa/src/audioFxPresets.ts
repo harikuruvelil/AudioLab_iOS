@@ -6,30 +6,34 @@ export interface ReverbPresetDefinition {
   url: string | null;
 }
 
+// ─── Base URL for public assets (Vite replaces at build time) ───
+// On dev server: "/", on GitHub Pages: "/AudioLab_iOS/"
+const BASE = import.meta.env.BASE_URL;
+
 export const REVERB_PRESETS: ReverbPresetDefinition[] = [
   { id: "off", label: "Off", url: null },
-  { id: "air_museum_1", label: "Air Museum 1", url: "/irs/air_museum_1.wav" },
-  { id: "air_museum_2", label: "Air Museum 2", url: "/irs/air_museum_2.wav" },
-  { id: "auditorium", label: "Auditorium", url: "/irs/auditorium.wav" },
-  { id: "drum_room_1", label: "Drum Room 1", url: "/irs/drum_room_1.wav" },
-  { id: "drum_room_2", label: "Drum Room 2", url: "/irs/drum_room_2.wav" },
-  { id: "stairwell", label: "Stairwell", url: "/irs/stairwell.wav" },
-  { id: "theatre_1", label: "Theatre 1", url: "/irs/theatre_1.wav" },
-  { id: "theatre_2", label: "Theatre 2", url: "/irs/theatre_2.wav" },
+  { id: "air_museum_1", label: "Air Museum 1", url: `${BASE}irs/air_museum_1.wav` },
+  { id: "air_museum_2", label: "Air Museum 2", url: `${BASE}irs/air_museum_2.wav` },
+  { id: "auditorium", label: "Auditorium", url: `${BASE}irs/auditorium.wav` },
+  { id: "drum_room_1", label: "Drum Room 1", url: `${BASE}irs/drum_room_1.wav` },
+  { id: "drum_room_2", label: "Drum Room 2", url: `${BASE}irs/drum_room_2.wav` },
+  { id: "stairwell", label: "Stairwell", url: `${BASE}irs/stairwell.wav` },
+  { id: "theatre_1", label: "Theatre 1", url: `${BASE}irs/theatre_1.wav` },
+  { id: "theatre_2", label: "Theatre 2", url: `${BASE}irs/theatre_2.wav` },
   {
     id: "university_hall_center_rows",
     label: "University Hall (Center Rows)",
-    url: "/irs/university_hall_center_rows.wav"
+    url: `${BASE}irs/university_hall_center_rows.wav`
   },
   {
     id: "university_hall_front_row",
     label: "University Hall (Front Row)",
-    url: "/irs/university_hall_front_row.wav"
+    url: `${BASE}irs/university_hall_front_row.wav`
   },
   {
     id: "university_hall_stalls",
     label: "University Hall (Stalls)",
-    url: "/irs/university_hall_stalls.wav"
+    url: `${BASE}irs/university_hall_stalls.wav`
   }
 ];
 
