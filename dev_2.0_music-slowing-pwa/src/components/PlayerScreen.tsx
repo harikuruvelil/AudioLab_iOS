@@ -382,10 +382,10 @@ export function PlayerScreen({
     // Disable glow passes on mobile. They are the most expensive canvas effect on iOS.
     const glowEnabled = !isMobile;
     const dpr = isMobile
-      ? Math.min(window.devicePixelRatio || 1, 1.0)
+      ? Math.min(window.devicePixelRatio || 1, 1.5)
       : highRefreshMode
-        ? Math.min(window.devicePixelRatio || 1, 1.35)
-        : Math.min(window.devicePixelRatio || 1, 2);
+        ? Math.min(window.devicePixelRatio || 1, 2.0)
+        : Math.min(window.devicePixelRatio || 1, 2.5);
     const rgb = hexToRgb(waveformColor);
     const lineColorStrong = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.95)`;
     const lineColorMedium = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.88)`;
@@ -581,7 +581,7 @@ export function PlayerScreen({
       context2d.shadowBlur = 0;
 
       // ─── Crisp foreground pass ───
-      context2d.lineWidth = Math.max(1.5, dpr * 1.1);
+      context2d.lineWidth = Math.max(1.8, dpr * 1.3);
       context2d.strokeStyle = lineColorStrong;
       context2d.stroke();
     };
@@ -654,85 +654,11 @@ export function PlayerScreen({
       context2d.shadowBlur = 0;
 
       // Crisp foreground
-      context2d.lineWidth = Math.max(1.4, dpr * 1.1);
+      context2d.lineWidth = Math.max(1.6, dpr * 1.2);
       context2d.strokeStyle = lineColorMedium;
       context2d.stroke();
     };
 
-    // ─── Frequency Spectrum Bars ───
-    const drawBars = (analyser: AnalyserNode) => {
-      const bufLen = analyser.frequencyBinCount;
-      if (!leftBytesRef.current || leftBytesRef.current.length !== bufLen) {
-        leftBytesRef.current = createByteArray(bufLen);
-      }
-      const freqData = leftBytesRef.current;
-      analyser.getByteFrequencyData(freqData);
-
-      const width = frameWidth;
-      const height = frameHeight;
-      drawGrid(width, height);
-
-      const barCount = isMobile ? Math.min(48, Math.floor(width / 8)) : Math.min(80, Math.floor(width / 6));
-      const gap = 2 * dpr;
-      const totalGap = gap * (barCount - 1);
-      const barWidth = Math.max(2, (width - totalGap) / barCount);
-      const barRadius = Math.max(1.5, barWidth * 0.35);
-
-      // Map frequency bins to bars with log-scale weighting
-      const usableBins = Math.floor(bufLen * 0.75);
-
-      for (let i = 0; i < barCount; i++) {
-        // Log-scale frequency mapping for natural sound distribution
-        const logMin = Math.log(1);
-        const logMax = Math.log(usableBins);
-        const startBin = Math.floor(Math.exp(logMin + (logMax - logMin) * (i / barCount)));
-        const endBin = Math.floor(Math.exp(logMin + (logMax - logMin) * ((i + 1) / barCount)));
-        const actualEnd = Math.max(startBin + 1, Math.min(endBin, usableBins));
-
-        let sum = 0;
-        let count = 0;
-        for (let b = startBin; b < actualEnd; b++) {
-          sum += freqData[b];
-          count++;
-        }
-        const avg = count > 0 ? sum / count : 0;
-        const normalized = avg / 255;
-        const barHeight = Math.max(2 * dpr, normalized * height * 0.85);
-
-        const x = i * (barWidth + gap);
-        const y = height - barHeight;
-
-        // Gradient per bar — accent color to accent2
-        const barGrad = context2d.createLinearGradient(x, height, x, y);
-        const hue = (i / barCount);
-        const r1 = Math.round(rgb.r + (142 - rgb.r) * hue);
-        const g1 = Math.round(rgb.g + (174 - rgb.g) * hue);
-        const b1 = Math.round(rgb.b + (255 - rgb.b) * hue);
-        barGrad.addColorStop(0, `rgba(${r1}, ${g1}, ${b1}, 0.15)`);
-        barGrad.addColorStop(0.5, `rgba(${r1}, ${g1}, ${b1}, ${0.5 + normalized * 0.45})`);
-        barGrad.addColorStop(1, `rgba(${r1}, ${g1}, ${b1}, ${0.7 + normalized * 0.3})`);
-
-        // Draw rounded bar
-        context2d.beginPath();
-        context2d.moveTo(x, height);
-        context2d.lineTo(x, y + barRadius);
-        context2d.arcTo(x, y, x + barRadius, y, barRadius);
-        context2d.arcTo(x + barWidth, y, x + barWidth, y + barRadius, barRadius);
-        context2d.lineTo(x + barWidth, height);
-        context2d.closePath();
-
-        context2d.fillStyle = barGrad;
-        context2d.fill();
-
-        // Glow on tall bars
-        if (glowEnabled && normalized > 0.3 && !ultraRefreshMode) {
-          context2d.shadowColor = `rgba(${r1}, ${g1}, ${b1}, ${normalized * 0.5})`;
-          context2d.shadowBlur = (6 + normalized * 10) * dpr;
-          context2d.fill();
-          context2d.shadowBlur = 0;
-        }
-      }
-    };
 
 
     let rafHandle = 0;
@@ -773,8 +699,6 @@ export function PlayerScreen({
           drawCircular(cachedAnalysers.mono);
         } else if (cachedAnalysers.mono) {
           drawLinear(cachedAnalysers.mono);
-          // Also draw bars overlay (frequency spectrum) below the waveform line
-          drawBars(cachedAnalysers.mono);
         } else {
           drawIdle();
         }

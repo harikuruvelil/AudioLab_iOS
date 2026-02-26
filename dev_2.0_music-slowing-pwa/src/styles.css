@@ -101,67 +101,18 @@ button {
   background: var(--bg-deep);
 }
 
-/* Animated gradient blobs */
+/* Ambient color background — lightweight, no animation to avoid iOS GPU crash on theme change */
 .app-root::before {
   content: "";
   position: absolute;
-  inset: -40%;
+  inset: 0;
   background:
-    radial-gradient(40% 40% at 20% 20%, color-mix(in srgb, var(--accent) 15%, transparent), transparent),
-    radial-gradient(35% 35% at 75% 25%, color-mix(in srgb, var(--accent-2) 12%, transparent), transparent),
-    radial-gradient(40% 40% at 50% 80%, color-mix(in srgb, var(--theme-tint) 18%, transparent), transparent),
-    radial-gradient(30% 30% at 85% 75%, color-mix(in srgb, var(--accent) 8%, transparent), transparent);
-  animation: meshFloat 25s ease-in-out infinite alternate;
+    radial-gradient(ellipse 80% 60% at 15% 10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+    radial-gradient(ellipse 70% 50% at 85% 20%, color-mix(in srgb, var(--accent-2) 8%, transparent), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 50% 90%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%);
   pointer-events: none;
   z-index: 0;
-  filter: blur(60px);
-}
-
-/* Secondary overlay blob for depth */
-.app-root::after {
-  content: "";
-  position: absolute;
-  inset: -20%;
-  background:
-    radial-gradient(50% 50% at 30% 70%, color-mix(in srgb, var(--accent-2) 10%, transparent), transparent),
-    radial-gradient(45% 45% at 70% 30%, color-mix(in srgb, var(--accent) 7%, transparent), transparent);
-  animation: meshFloat2 30s ease-in-out infinite alternate;
-  pointer-events: none;
-  z-index: 0;
-  filter: blur(80px);
-  opacity: 0.7;
-}
-
-@keyframes meshFloat {
-  0% {
-    transform: translate(0, 0) rotate(0deg) scale(1);
-  }
-
-  33% {
-    transform: translate(5%, -3%) rotate(3deg) scale(1.05);
-  }
-
-  66% {
-    transform: translate(-3%, 5%) rotate(-2deg) scale(0.98);
-  }
-
-  100% {
-    transform: translate(2%, 2%) rotate(1deg) scale(1.02);
-  }
-}
-
-@keyframes meshFloat2 {
-  0% {
-    transform: translate(0, 0) rotate(0deg);
-  }
-
-  50% {
-    transform: translate(-4%, 3%) rotate(-4deg);
-  }
-
-  100% {
-    transform: translate(3%, -2%) rotate(2deg);
-  }
+  transition: background 800ms ease;
 }
 
 /* ─── header ─── */
